@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"C:\\\\Users\\\\lance\\\\OneDrive\\\\Documents\\\\Project Zephyr\" -name \"*.zph\" -type f -exec wc -l {})"
+    ]
+  }
+}

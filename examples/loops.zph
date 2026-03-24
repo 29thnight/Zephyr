@@ -1,0 +1,7 @@
+fn sum_all(values: Array) -> Int {
+    let mut total: Int = 0;
+    for item in values {
+        total = total + item;
+    }
+    return total;
+}

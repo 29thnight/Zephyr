@@ -1,0 +1,28 @@
+{
+  "generated_at_utc": "2026-03-21T00:00:00Z",
+  "schema": "zephyr-bench-v2",
+  "kind": "reference-v1-baseline",
+  "notes": "Curated v1 acceptance baseline for default v2 benchmark gating.",
+  "cases": [
+    {
+      "name": "hot_arithmetic_loop",
+      "mean_ns": 1000000000,
+      "p95_ns": 1200000000
+    },
+    {
+      "name": "array_object_churn",
+      "mean_full_gc_cycles": 10
+    },
+    {
+      "name": "host_handle_entity",
+      "mean_ns": 100000000,
+      "mean_host_resolves": 3000
+    },
+    {
+      "name": "coroutine_yield_resume",
+      "mean_ns": 30000000,
+      "mean_coroutine_resumes": 401,
+      "mean_ast_fallbacks": 1
+    }
+  ]
+}

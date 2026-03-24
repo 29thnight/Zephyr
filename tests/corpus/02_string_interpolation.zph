@@ -1,0 +1,5 @@
+fn main() {
+    let name = "Zephyr";
+    let ver = 1;
+    print(f"Hello {name} v{ver}");
+}

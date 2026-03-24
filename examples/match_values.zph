@@ -1,0 +1,7 @@
+fn mood_label(value: Int) -> String {
+    return match value {
+        0 => "idle",
+        1 => "walk",
+        _ => "other",
+    };
+}

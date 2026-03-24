@@ -1,0 +1,10 @@
+import "engine" as engine;
+
+fn main() -> Int {
+    let c = player();
+    engine.log("player", c.name, c.hp);
+    c.damage(15);
+    c.hp = c.hp + 5;
+    engine.log("after", c.hp);
+    return c.hp;
+}

@@ -1,0 +1,7 @@
+fn countdown(start: Int) -> Int {
+    let mut current: Int = start;
+    while current > 0 {
+        current = current - 1;
+    }
+    return current;
+}

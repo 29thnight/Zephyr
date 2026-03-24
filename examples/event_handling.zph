@@ -1,0 +1,17 @@
+import "engine" as engine;
+
+fn on_player_damaged(amount: Int) -> Int {
+    engine.log("event.damage", amount);
+    return amount + 3;
+}
+
+fn on_faulty_damage(amount: Int) -> Int {
+    assert(amount < 0);
+    return amount;
+}
+
+fn main() {
+    register_damage_handler("on_player_damaged");
+    register_failure_handler("on_faulty_damage");
+    engine.log("handlers", "registered");
+}

@@ -1,0 +1,11 @@
+enum State {
+    Idle,
+    Running(Int),
+}
+
+fn step(state: State) -> State {
+    return match state {
+        State::Idle => State::Running(1),
+        State::Running(value) => State::Running(value + 1),
+    };
+}

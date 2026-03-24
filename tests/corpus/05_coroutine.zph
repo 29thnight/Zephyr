@@ -1,0 +1,17 @@
+fn counter(limit: Int) {
+    return coroutine fn() -> Int {
+        let mut i = 0;
+        while i < limit {
+            yield i;
+            i = i + 1;
+        }
+        return i;
+    };
+}
+
+fn main() {
+    let c = counter(3);
+    print(resume c);
+    print(resume c);
+    print(resume c);
+}

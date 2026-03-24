@@ -1,0 +1,5 @@
+import "import_util.zph";
+
+fn main() -> Int {
+    return twice(21);
+}

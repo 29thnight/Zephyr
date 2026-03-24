@@ -1,0 +1,7 @@
+struct Node { value: Int, next: Any }
+
+fn main() {
+    let n = Node { value: 42, next: nil };
+    print(n?.value);
+    print(n?.next?.value);
+}

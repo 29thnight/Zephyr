@@ -1,0 +1,5 @@
+import "engine" as engine;
+
+fn main() {
+    engine.log("hello", "from", "host module");
+}

@@ -1,0 +1,5 @@
+fn make_adder(base: Int) -> Function {
+    return fn(value: Int) -> Int {
+        return value + base;
+    };
+}

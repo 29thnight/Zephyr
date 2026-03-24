@@ -1,0 +1,16 @@
+trait Greet {
+    fn greet(self) -> String;
+}
+
+struct Cat { name: String }
+
+impl Greet for Cat {
+    fn greet(self) -> String {
+        return f"Meow, I am {self.name}";
+    }
+}
+
+fn main() {
+    let c = Cat { name: "Kitty" };
+    print(c.greet());
+}

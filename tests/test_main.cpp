@@ -1,0 +1,92 @@
+#include "test_common.hpp"
+
+using namespace zephyr_tests;
+
+int main() {
+    try {
+        test_execute_and_call();
+        test_match_enum();
+        test_match_guard_and_or_pattern();
+        test_match_bool_and_nil_literals();
+        test_trait_impl_dispatch();
+        test_dap_server_smoke();
+        test_snapshot_restore();
+        test_host_object();
+        test_host_object_identity_and_long_lived_handle();
+        test_name_based_event_registration_and_error_propagation();
+        test_frame_handle_storage_and_capture_are_rejected();
+        test_handle_invalidation_and_epochs();
+        test_incremental_gc_stats_progress();
+        test_string_literal_interning_tracks_hits_and_misses();
+        test_core_stdlib_helpers();
+        test_stdlib_module_imports();
+        test_package_root_imports_lib_entry();
+        test_check_reports_parse_location();
+        test_check_rejects_circular_import();
+        test_check_reports_trait_impl_missing_method();
+        test_check_accepts_complete_trait_impl_and_warns_on_extra_method();
+        test_check_reports_function_signature_mismatch_with_definition_location();
+        test_check_warns_for_optional_chain_nil_propagation();
+        test_check_rejects_module_member_that_is_not_exported();
+        test_runtime_error_includes_stack_trace();
+        test_runtime_trait_method_not_found_includes_hint();
+        test_check_warns_for_non_exhaustive_match_cases();
+        test_corpus_scripts();
+        test_gc_verify_full_and_dirty_barrier_dedup();
+        test_gc_stress_mode_advances_at_bytecode_safe_points();
+        test_serialization_requires_stable_handles();
+        test_serialization_schema_rejects_unknown_version();
+        test_bytecode_loop_and_branch();
+        test_bytecode_for_in_array();
+        test_bytecode_struct_enum_match();
+        test_bytecode_local_slots_shadow_and_closure_sync();
+        test_closure_cell_capture_survives_outer_return_and_gc();
+        test_coroutine_upvalue_bytecode_avoids_ast_fallback();
+        test_lightweight_coroutine_skips_local_binding_cache();
+        test_transitive_upvalue_bindings_support_nested_closure_after_outer_return();
+        test_compound_member_and_index_assignment_run_on_native_bytecode_path();
+        test_resume_expression_runs_on_native_bytecode_path();
+        test_gc_collects_unreachable_cycles_and_returns_to_baseline();
+        test_gc_preserves_temporary_callee_during_collection();
+        test_module_bytecode_import_and_top_level_execution();
+        test_module_bytecode_cache_reuse_and_invalidation();
+        test_coroutine_resume_and_done();
+        test_coroutine_is_lazy_and_preserves_state_across_gc();
+        test_nested_script_function_yield_inside_coroutine();
+        test_deeply_nested_script_function_yield_survives_gc();
+        test_coroutine_runtime_stats_and_dump();
+        test_yield_outside_coroutine_rejected();
+        test_coroutine_rejects_frame_handle_yield();
+        test_break_continue_and_compound_assignment();
+        test_v2_callback_handle_and_dump_bytecode();
+        test_v2_global_and_module_name_slots_use_cached_bindings();
+        test_v2_coroutine_handles_young_gc_and_deserialize();
+        test_gc_pause_stats_api();
+        test_gc_trace_json_export();
+        test_coroutine_trace_report_sequence();
+        test_v2_minor_remembered_set_preserves_old_to_young_edges();
+        test_v2_struct_cards_preserve_old_to_young_field_edges();
+        test_v2_environment_cards_preserve_old_local_upvalue_cells();
+        test_v2_suspended_coroutine_cards_preserve_local_young_values();
+        test_v2_suspended_coroutine_syncs_binding_backed_locals_before_yield();
+        test_v2_benchmark_gates_compare_against_baseline();
+        test_v2_benchmark_auto_discovers_default_baseline();
+        test_gc_object_sizeof_baselines();
+        test_phase7_compact_old_generation();
+        test_phase1_1_lightweight_call_skips_environment_allocation();
+        test_phase1_1_nested_closure_with_upvalue_mutation();
+        test_phase1_2_constant_folding_reduces_bytecode();
+        test_wave_a_coroutine_set_unordered();
+        test_wave_a_barrier_young_owner_skips_remembered_set();
+        test_wave_a_int_arithmetic_fastpath();
+        test_wave_e1_string_interpolation_and_optional_chaining();
+        test_wave_e1_class_binder();
+        test_wave_e1_profiler_report();
+        test_wave_f_coroutine_trace_report();
+        std::cout << "all tests passed" << std::endl;
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << std::endl;
+        return 1;
+    }
+}

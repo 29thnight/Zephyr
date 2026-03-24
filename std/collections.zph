@@ -1,0 +1,36 @@
+export fn range(start: Int, end: Int) -> Array {
+    return __zephyr_std_range(start, end);
+}
+
+export fn map_array(arr: Array, f: Function) -> Array {
+    let mut result = [];
+    let mut i: Int = 0;
+    while i < __zephyr_std_len(arr) {
+        result = __zephyr_std_push(result, f(arr[i]));
+        i = i + 1;
+    }
+    return result;
+}
+
+export fn filter_array(arr: Array, pred: Function) -> Array {
+    let mut result = [];
+    let mut i: Int = 0;
+    while i < __zephyr_std_len(arr) {
+        let value = arr[i];
+        if pred(value) {
+            result = __zephyr_std_push(result, value);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+export fn fold_array(arr: Array, init: Any, f: Function) -> Any {
+    let mut acc = init;
+    let mut i: Int = 0;
+    while i < __zephyr_std_len(arr) {
+        acc = f(acc, arr[i]);
+        i = i + 1;
+    }
+    return acc;
+}

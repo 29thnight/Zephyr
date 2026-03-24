@@ -1,0 +1,3 @@
+fn describe(name: String, hp: Int) -> String {
+    return name + ":" + hp;
+}
