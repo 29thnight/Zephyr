@@ -130,6 +130,7 @@
 
 | # | 항목 | 상태 | 비고 |
 |---|------|------|------|
+| H.0 | Register-VM 최적화 + 코루틴 통합 | ✅ 완료 | `R_SI_*` superinstruction, `/GL+/LTCG` (/WPO), 코루틴 모듈 가드 제거 → 헬퍼 함수 레지스터 모드 컴파일, `pending_call_dst_reg` 로 R_CALL 중단/재개 수정. hot_arithmetic: 2.61ms, coroutine: 386µs, gates 5/5 PASS |
 | H.1 | CMake 크로스플랫폼 빌드 | 🔲 미완료 | Windows + Linux 검증 |
 | H.2 | .inl → .cpp 완전 분리 | ✅ 완료 | `zephyr_gc.cpp` 분리 + 내부 공용 헤더 정리 |
 | H.3 | 표준 라이브러리 기초 | ✅ 완료 | `std/math.zph`, `std/string.zph`, `std/collections.zph` |
@@ -138,4 +139,4 @@
 
 ---
 
-_마지막 업데이트: 2026-03-24 — Wave H 플랫폼 기반 작업 완료. 벤치 결과는 `wave_h_baseline.json` 참조._
+_마지막 업데이트: 2026-03-28 — Wave H.0 코루틴 레지스터 통합 완료. 최종 수치는 `bench/results/wave_h0_final.json` 참조._
