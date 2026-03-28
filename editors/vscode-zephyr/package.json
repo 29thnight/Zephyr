@@ -1,0 +1,60 @@
+{
+  "name": "vscode-zephyr",
+  "displayName": "Zephyr Language",
+  "description": "Zephyr scripting language support",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:zephyr"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "zephyr",
+        "aliases": [
+          "Zephyr",
+          "zephyr"
+        ],
+        "extensions": [
+          ".zph"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zephyr",
+        "scopeName": "source.zephyr",
+        "path": "./syntaxes/zephyr.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Zephyr",
+      "properties": {
+        "zephyr.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to zephyr_cli.exe (auto-detected if empty)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Zephyr",
+  "scopeName": "source.zephyr",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#literals" },
+    { "include": "#functions" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.zephyr",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.zephyr",
+          "begin": "/\\*", "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.zephyr",
+          "begin": "f\"", "end": "\"",
+          "patterns": [
+            { "name": "meta.embedded.zephyr", "begin": "\\{", "end": "\\}" }
+          ]
+        },
+        {
+          "name": "string.quoted.double.zephyr",
+          "begin": "\"", "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.zephyr", "match": "\\\\." }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.zephyr",
+          "match": "\\b(if|else|while|for|return|break|continue|match|yield|import|export)\\b"
+        },
+        {
+          "name": "keyword.declaration.zephyr",
+          "match": "\\b(fn|let|trait|impl|struct|class|type)\\b"
+        },
+        {
+          "name": "keyword.operator.zephyr",
+          "match": "\\b(and|or|not|in|is)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.zephyr",
+          "match": "\\b(Int|Float|String|Bool|Nil|Any|List|Map|Coroutine)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.zephyr",
+          "match": "\\b(true|false|nil)\\b"
+        },
+        {
+          "name": "constant.numeric.zephyr",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.zephyr",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\s*\\()"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.zephyr",
+          "match": "(->|=>|\\?\\.|\\+=|-=|\\*=|/=|==|!=|<=|>=|<|>|\\+|-|\\*|/|%|=)"
+        }
+      ]
+    }
+  }
+}

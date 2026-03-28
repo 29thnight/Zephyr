@@ -1,0 +1,9 @@
+fn hot_loop(limit: Int) -> Int {
+    let total = 0;
+    let i = 0;
+    while i < limit {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
