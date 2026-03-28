@@ -36,6 +36,15 @@
 #endif
 
 
+// Opt③: branch-prediction hints for resume hot path.
+#if defined(_MSC_VER)
+#define ZEPHYR_LIKELY(x)   (x)
+#define ZEPHYR_UNLIKELY(x) (x)
+#else
+#define ZEPHYR_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define ZEPHYR_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 namespace zephyr {
 
 [[noreturn]] inline void fail(const std::string& message) {

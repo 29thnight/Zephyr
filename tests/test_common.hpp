@@ -119,6 +119,9 @@ inline void run_corpus_case(const std::filesystem::path& path, const std::string
 }
 
 void test_execute_and_call();
+void test_register_vm_control_flow_and_calls();
+void test_register_vm_recursion();
+void test_register_vm_superinstructions();
 void test_match_enum();
 void test_match_guard_and_or_pattern();
 void test_match_bool_and_nil_literals();

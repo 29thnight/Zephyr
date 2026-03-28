@@ -5,6 +5,9 @@ using namespace zephyr_tests;
 int main() {
     try {
         test_execute_and_call();
+        test_register_vm_control_flow_and_calls();
+        test_register_vm_recursion();
+        test_register_vm_superinstructions();
         test_match_enum();
         test_match_guard_and_or_pattern();
         test_match_bool_and_nil_literals();

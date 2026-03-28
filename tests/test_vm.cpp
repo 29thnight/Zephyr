@@ -17,6 +17,99 @@ void test_execute_and_call() {
     require(result.is_int() && result.as_int() == 5, "unexpected add result");
 }
 
+void test_register_vm_control_flow_and_calls() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn twice(value: Int) -> Int {
+                return value + value;
+            }
+
+            fn run(limit: Int) -> Int {
+                let mut total: Int = 0;
+                let mut i: Int = 0;
+                while i < limit {
+                    if i == 2 {
+                        total = total + twice(i);
+                    } else {
+                        total = total + i;
+                    }
+                    i = i + 1;
+                }
+                return total;
+            }
+        )",
+        "unit_register_vm_flow",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_register_vm_flow", "run");
+    require(handle.has_value(), "missing register vm run handle");
+    const auto result = vm.call(*handle, {zephyr::ZephyrValue(5)});
+    require(result.is_int() && result.as_int() == 12, "register vm control flow returned unexpected result");
+
+    const auto dump = vm.dump_bytecode("unit_register_vm_flow", "run");
+    require(dump.find("register_mode=true") != std::string::npos, "register vm dump should mark register mode");
+    require(dump.find("op=R_CALL") != std::string::npos, "register vm dump should include register calls");
+    require(dump.find("op=R_JUMP_IF_FALSE") != std::string::npos || dump.find("op=R_SI_CMP_JUMP_FALSE") != std::string::npos,
+            "register vm dump should include register branches");
+    require(dump.find("dst=r") != std::string::npos, "register vm dump should decode register operands");
+}
+
+void test_register_vm_recursion() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn fact(n: Int) -> Int {
+                if n <= 1 {
+                    return 1;
+                }
+                return n * fact(n - 1);
+            }
+        )",
+        "unit_register_vm_recursion",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_register_vm_recursion", "fact");
+    require(handle.has_value(), "missing register vm fact handle");
+    const auto result = vm.call(*handle, {zephyr::ZephyrValue(5)});
+    require(result.is_int() && result.as_int() == 120, "register vm recursion returned unexpected result");
+
+    const auto dump = vm.dump_bytecode("unit_register_vm_recursion", "fact");
+    require(dump.find("register_mode=true") != std::string::npos, "recursive register vm dump should mark register mode");
+    require(dump.find("op=R_LE") != std::string::npos || dump.find("op=R_SI_CMP_JUMP_FALSE") != std::string::npos,
+            "recursive register vm dump should include comparison opcodes");
+    require(dump.find("op=R_CALL") != std::string::npos, "recursive register vm dump should include recursive calls");
+}
+
+void test_register_vm_superinstructions() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn run(limit: Int) -> Int {
+                let mut total: Int = 0;
+                let mut i: Int = 0;
+                while i < limit {
+                    total = total + i;
+                    i = i + 1;
+                }
+                return total;
+            }
+        )",
+        "unit_register_vm_superinstructions",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_register_vm_superinstructions", "run");
+    require(handle.has_value(), "missing register vm superinstruction handle");
+    const auto result = vm.call(*handle, {zephyr::ZephyrValue(5)});
+    require(result.is_int() && result.as_int() == 10, "register vm superinstruction function returned unexpected result");
+
+    const auto dump = vm.dump_bytecode("unit_register_vm_superinstructions", "run");
+    require(dump.find("op=R_SI_CMP_JUMP_FALSE") != std::string::npos,
+            "register vm dump should include fused compare+jump superinstruction");
+    require(dump.find("op=R_SI_ADD_STORE") != std::string::npos || dump.find("op=R_SI_LOAD_ADD_STORE") != std::string::npos,
+            "register vm dump should include fused arithmetic store superinstruction");
+}
+
 void test_trait_impl_dispatch() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
