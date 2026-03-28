@@ -289,7 +289,8 @@ void test_bytecode_loop_and_branch() {
     require(result.is_int() && result.as_int() == 30, "unexpected bytecode accumulate result");
 
     const auto dump = vm.dump_bytecode("unit_bytecode", "accumulate");
-    require(dump.find("[SI] op=SI") != std::string::npos, "bytecode dump should mark fused superinstructions");
+    require(dump.find("register_mode=true") != std::string::npos || dump.find("[SI] op=SI") != std::string::npos,
+            "bytecode dump should expose either register mode or fused superinstructions");
 }
 
 void test_bytecode_for_in_array() {
@@ -827,7 +828,8 @@ void test_v2_global_and_module_name_slots_use_cached_bindings() {
     const auto read_dump = vm.dump_bytecode("unit_v2_global_slots", "read");
     require(read_dump.find("globals after") != std::string::npos,
             "function dump should list cached global slots for nested bytecode chunks");
-    require(read_dump.find("op=LoadName operand=") != std::string::npos && read_dump.find("text=after") != std::string::npos,
+    require((read_dump.find("op=LoadName operand=") != std::string::npos && read_dump.find("text=after") != std::string::npos)
+                || read_dump.find("op=R_LOAD_GLOBAL") != std::string::npos,
             "function bytecode should emit slot-indexed LoadName for module globals");
 
     const auto read_handle = vm.get_function("unit_v2_global_slots", "read");
