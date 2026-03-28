@@ -7,6 +7,9 @@
 #include <sstream>
 #include <string>
 
+// Declared in cli/lsp_server.cpp
+int run_lsp_server(const char* exe_path);
+
 namespace {
 
 double superinstruction_hit_rate_pct(const zephyr::ZephyrRuntimeStats& stats) {
@@ -44,7 +47,8 @@ void print_usage() {
               << "  zephyr repl\n"
               << "  zephyr stats <file>\n"
               << "  zephyr dump-bytecode <file> [function]\n"
-              << "  zephyr bench [output.json] [--baseline <json>] [--strict]\n";
+              << "  zephyr bench [output.json] [--baseline <json>] [--strict]\n"
+              << "  zephyr lsp              Start LSP server (stdin/stdout)\n";
 }
 
 std::string runtime_stats_json(const zephyr::ZephyrRuntimeStats& stats, const zephyr::GCPauseStats& gc_pause_stats) {
@@ -234,6 +238,9 @@ int main(int argc, char** argv) {
                 return 1;
             }
             return dump_bytecode(argv[2], argc >= 4 ? argv[3] : "", argv[0]);
+        }
+        if (command == "lsp") {
+            return run_lsp_server(argv[0]);
         }
         if (command == "bench") {
             std::optional<std::filesystem::path> output_path;
