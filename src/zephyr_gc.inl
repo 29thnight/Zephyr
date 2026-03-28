@@ -207,12 +207,8 @@ void CoroutineObject::trace(Runtime& runtime) {
         for (const auto& value : frame.locals) {
             runtime.mark_value(value);
         }
-        // Opt①+Opt④: trace inline or overflow registers, skipping nil (no GC object)
-        const Value* rd = frame.reg_data();
-        for (int ri = 0; ri < frame.reg_count; ++ri) {
-            if (!rd[ri].is_nil()) {
-                runtime.mark_value(rd[ri]);
-            }
+        for (const auto& value : frame.regs) {
+            runtime.mark_value(value);
         }
     }
 }
@@ -917,16 +913,7 @@ void Runtime::trace_young_coroutine(CoroutineObject* coroutine) {
         if (coroutine->suspended) {
             trace_young_value_cards(frame.stack, frame.stack_cards);
             trace_young_value_cards(frame.locals, frame.local_cards);
-            // Opt①: inline regs don't use card table (scan directly); overflow regs use reg_cards
-            if (frame.reg_count > 0 && frame.reg_count <= CoroutineFrameState::kInlineRegs) {
-                for (int ri = 0; ri < frame.reg_count; ++ri) {
-                    if (!frame.inline_regs[ri].is_nil()) {
-                        mark_young_value(frame.inline_regs[ri]);
-                    }
-                }
-            } else if (frame.reg_count > CoroutineFrameState::kInlineRegs) {
-                trace_young_value_cards(frame.overflow_regs, frame.reg_cards);
-            }
+            trace_young_value_cards(frame.regs, frame.reg_cards);
         } else {
             for (const auto& value : frame.stack) {
                 mark_young_value(value);
@@ -934,12 +921,8 @@ void Runtime::trace_young_coroutine(CoroutineObject* coroutine) {
             for (const auto& value : frame.locals) {
                 mark_young_value(value);
             }
-            // Opt①+Opt④: trace inline or overflow registers, skipping nil
-            const Value* rd = frame.reg_data();
-            for (int ri = 0; ri < frame.reg_count; ++ri) {
-                if (!rd[ri].is_nil()) {
-                    mark_young_value(rd[ri]);
-                }
+            for (const auto& value : frame.regs) {
+                mark_young_value(value);
             }
         }
     }
@@ -1054,18 +1037,14 @@ void Runtime::rebuild_coroutine_cards(CoroutineObject* coroutine) {
                 frame.local_cards[card_index / kGcCardsPerWord] |= (std::uint64_t(1) << (card_index % kGcCardsPerWord));
             }
         }
-        // Opt①: inline regs don't need card table; only overflow_regs get card tracking
-        if (frame.reg_count > CoroutineFrameState::kInlineRegs && !frame.overflow_regs.empty()) {
-            const std::size_t n = frame.overflow_regs.size();
-            const std::size_t n_reg_cards = card_count_for_elements(n);
-            frame.reg_cards.assign(value_card_count(n), 0);
-            for (std::size_t card_index = 0; card_index < n_reg_cards; ++card_index) {
-                if (value_card_has_young_reference(frame.overflow_regs, card_index)) {
+        if (!frame.regs.empty()) {
+            const std::size_t reg_cards = card_count_for_elements(frame.regs.size());
+            frame.reg_cards.assign(value_card_count(frame.regs.size()), 0);
+            for (std::size_t card_index = 0; card_index < reg_cards; ++card_index) {
+                if (value_card_has_young_reference(frame.regs, card_index)) {
                     frame.reg_cards[card_index / kGcCardsPerWord] |= (std::uint64_t(1) << (card_index % kGcCardsPerWord));
                 }
             }
-        } else {
-            frame.reg_cards.clear();
         }
     }
 }
@@ -4029,7 +4008,7 @@ VoidResult Runtime::push_coroutine_script_frame(CoroutineObject* coroutine, Scri
     frame.uses_register_mode = function->bytecode->uses_register_mode;
     frame.ip_index = 0;
     if (frame.uses_register_mode) {
-        frame.init_regs(static_cast<std::size_t>(std::max(function->bytecode->max_regs, function->bytecode->local_count)));
+        frame.regs.assign(static_cast<std::size_t>(std::max(function->bytecode->max_regs, function->bytecode->local_count)), Value::nil());
     }
     install_upvalue_bindings(call_env, *function->bytecode, function->captured_upvalues);
 
@@ -4042,8 +4021,8 @@ VoidResult Runtime::push_coroutine_script_frame(CoroutineObject* coroutine, Scri
         if (i < frame.locals.size()) {
             frame.locals[i] = args[i];
         }
-        if (frame.uses_register_mode && i < std::size_t(frame.reg_count)) {
-            frame.reg_data()[i] = args[i];
+        if (frame.uses_register_mode && i < frame.regs.size()) {
+            frame.regs[i] = args[i];
         }
     }
 
@@ -4145,10 +4124,7 @@ void Runtime::compact_suspended_coroutine(CoroutineObject* coroutine) {
             capacity_saved += compact_vector_storage(frame.stack_cards);
             capacity_saved += compact_vector_storage(frame.local_cards);
             if (frame.uses_register_mode) {
-                // Opt①: only overflow_regs uses heap storage; inline_regs is fixed-size
-                if (frame.reg_count > CoroutineFrameState::kInlineRegs) {
-                    capacity_saved += compact_vector_storage(frame.overflow_regs);
-                }
+                capacity_saved += compact_vector_storage(frame.regs);
                 capacity_saved += compact_vector_storage(frame.reg_cards);
             }
             ++compacted_frames;
@@ -4191,7 +4167,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_bytec
 
     std::size_t total_steps = 0;
     while (true) {
-        if (ZEPHYR_UNLIKELY(coroutine->frames.size() > 1)) {  // Opt③: nested frames are rare
+        if (coroutine->frames.size() > 1) {
             ZEPHYR_TRY_ASSIGN(child_result, resume_nested_coroutine_frame(coroutine, module, call_span));
             total_steps += child_result.step_count;
             if (child_result.yielded) {
@@ -4201,8 +4177,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_bytec
             auto& parent_frame = coroutine->frames.back();
             if (parent_frame.uses_register_mode && parent_frame.pending_call_dst_reg.has_value()) {
                 const std::size_t dst_reg = *parent_frame.pending_call_dst_reg;
-                if (dst_reg < std::size_t(parent_frame.reg_count)) {  // Opt①
-                    parent_frame.reg_data()[dst_reg] = child_result.value;
+                if (dst_reg < parent_frame.regs.size()) {
+                    parent_frame.regs[dst_reg] = child_result.value;
                 }
                 parent_frame.pending_call_dst_reg = std::nullopt;
             } else {
@@ -4234,8 +4210,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
     const BytecodeFunction& chunk = *frame().bytecode;
     const bool lightweight = chunk.uses_only_locals_and_upvalues;
     std::size_t executed_steps = 0;
-    if (frame().uses_register_mode && frame().reg_count == 0) {  // Opt①
-        frame().init_regs(static_cast<std::size_t>(std::max(chunk.max_regs, chunk.local_count)));
+    if (frame().uses_register_mode && frame().regs.empty()) {
+        frame().regs.resize(static_cast<std::size_t>(std::max(chunk.max_regs, chunk.local_count)), Value::nil());
     }
     if (frame().locals.empty()) {
         frame().locals.resize(static_cast<std::size_t>(std::max(chunk.local_count, 0)), Value::nil());
@@ -4540,7 +4516,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
             frame().global_binding_versions.clear();
             frame().stack_cards.clear();
             frame().local_cards.clear();
-            frame().clear_regs();   // Opt①: clears reg_count and overflow_regs
+            frame().regs.clear();
             frame().reg_cards.clear();
             frame().current_env = nullptr;
             frame().root_env = nullptr;
@@ -4550,9 +4526,9 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
         return CoroutineExecutionResult{yielded, value, executed_steps};
     };
 
-    if (ZEPHYR_LIKELY(frame().uses_register_mode)) {  // Opt③: register mode is the common path
+    if (frame().uses_register_mode) {
         auto register_index = [&](std::uint8_t reg, const Span& span) -> RuntimeResult<std::size_t> {
-            if (static_cast<std::size_t>(reg) >= static_cast<std::size_t>(frame().reg_count)) {  // Opt①
+            if (static_cast<std::size_t>(reg) >= frame().regs.size()) {
                 return make_loc_error<std::size_t>(module.name, span, "Invalid register access.");
             }
             return static_cast<std::size_t>(reg);
@@ -4640,7 +4616,6 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 maybe_run_gc_stress_safe_point();
             }
             CoroutineFrameState& current_frame = frame();
-            Value* const regs = current_frame.reg_data();  // Opt①: direct pointer to inline or overflow storage
             const CompactInstruction& instruction = chunk.instructions[current_frame.ip_index];
             const InstructionMetadata& metadata = chunk.metadata[current_frame.ip_index];
             const Span span = instruction_span(instruction);
@@ -4651,14 +4626,14 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 case BytecodeOp::R_LOAD_CONST: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(value, load_bytecode_constant(chunk, unpack_r_index_operand(instruction.operand)));
-                    regs[dst] = value;
+                    current_frame.regs[dst] = value;
                     ++current_frame.ip_index;
                     break;
                 }
                 case BytecodeOp::R_LOAD_GLOBAL: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(binding_pair, resolve_global_binding(unpack_r_index_operand(instruction.operand), span));
-                    regs[dst] = read_binding_value(*binding_pair.second);
+                    current_frame.regs[dst] = read_binding_value(*binding_pair.second);
                     ++current_frame.ip_index;
                     break;
                 }
@@ -4674,19 +4649,19 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                             "Cannot assign to immutable binding '" +
                                 chunk.global_names[static_cast<std::size_t>(unpack_r_index_operand(instruction.operand))] + "'.");
                     }
-                    ZEPHYR_TRY(enforce_type(regs[src], binding->type_name, span, module.name, "assignment"));
-                    ZEPHYR_TRY(validate_handle_store(regs[src], HandleContainerKind::Global, span, module.name, "global assignment"));
+                    ZEPHYR_TRY(enforce_type(current_frame.regs[src], binding->type_name, span, module.name, "assignment"));
+                    ZEPHYR_TRY(validate_handle_store(current_frame.regs[src], HandleContainerKind::Global, span, module.name, "global assignment"));
                     if (binding->cell != nullptr) {
-                        ZEPHYR_TRY(validate_handle_store(regs[src],
+                        ZEPHYR_TRY(validate_handle_store(current_frame.regs[src],
                                                          binding->cell->container_kind,
                                                          span,
                                                          module.name,
                                                          "coroutine capture assignment"));
                     }
-                    write_binding_value(*binding, regs[src]);
-                    note_write(owner, regs[src]);
+                    write_binding_value(*binding, current_frame.regs[src]);
+                    note_write(owner, current_frame.regs[src]);
                     if (binding->cell != nullptr) {
-                        note_write(static_cast<GcObject*>(binding->cell), regs[src]);
+                        note_write(static_cast<GcObject*>(binding->cell), current_frame.regs[src]);
                     }
                     ++current_frame.ip_index;
                     break;
@@ -4694,7 +4669,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 case BytecodeOp::R_MOVE: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                    regs[dst] = regs[src];
+                    current_frame.regs[dst] = current_frame.regs[src];
                     ++current_frame.ip_index;
                     break;
                 }
@@ -4712,23 +4687,23 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                     ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
                     ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
-                    ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(instruction.op, regs[src1], regs[src2], span));
-                    regs[dst] = result;
+                    ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(instruction.op, current_frame.regs[src1], current_frame.regs[src2], span));
+                    current_frame.regs[dst] = result;
                     ++current_frame.ip_index;
                     break;
                 }
                 case BytecodeOp::R_NOT: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                    regs[dst] = Value::boolean(!is_truthy(regs[src]));
+                    current_frame.regs[dst] = Value::boolean(!is_truthy(current_frame.regs[src]));
                     ++current_frame.ip_index;
                     break;
                 }
                 case BytecodeOp::R_NEG: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                    ZEPHYR_TRY_ASSIGN(result, apply_unary_op(TokenType::Minus, regs[src], span, module.name));
-                    regs[dst] = result;
+                    ZEPHYR_TRY_ASSIGN(result, apply_unary_op(TokenType::Minus, current_frame.regs[src], span, module.name));
+                    current_frame.regs[dst] = result;
                     ++current_frame.ip_index;
                     break;
                 }
@@ -4740,9 +4715,9 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
                         ZEPHYR_TRY_ASSIGN(arg_reg,
                                           register_index(static_cast<std::uint8_t>(instruction.src2 + index), span));
-                        args.push_back(regs[arg_reg]);
+                        args.push_back(current_frame.regs[arg_reg]);
                     }
-                    const Value callee_value = regs[callee];
+                    const Value callee_value = current_frame.regs[callee];
                     if (callee_value.is_object() && callee_value.as_object()->kind == ObjectKind::ScriptFunction) {
                         ++current_frame.ip_index;
                         ZEPHYR_TRY(push_coroutine_script_frame(coroutine,
@@ -4757,11 +4732,11 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                             nested_result.step_count = executed_steps;
                             return nested_result;
                         }
-                        frame().reg_data()[dst] = nested_result.value;  // Opt①: fresh frame() after realloc
+                        frame().regs[dst] = nested_result.value;
                         break;
                     }
                     ZEPHYR_TRY_ASSIGN(result, call_value(callee_value, args, span, module.name));
-                    regs[dst] = result;
+                    current_frame.regs[dst] = result;
                     ++current_frame.ip_index;
                     break;
                 }
@@ -4770,7 +4745,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     break;
                 case BytecodeOp::R_JUMP_IF_FALSE: {
                     ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
-                    if (!is_truthy(regs[src])) {
+                    if (!is_truthy(current_frame.regs[src])) {
                         current_frame.ip_index = static_cast<std::size_t>(unpack_r_jump_target_operand(instruction.operand));
                     } else {
                         ++current_frame.ip_index;
@@ -4779,7 +4754,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 }
                 case BytecodeOp::R_JUMP_IF_TRUE: {
                     ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
-                    if (is_truthy(regs[src])) {
+                    if (is_truthy(current_frame.regs[src])) {
                         current_frame.ip_index = static_cast<std::size_t>(unpack_r_jump_target_operand(instruction.operand));
                     } else {
                         ++current_frame.ip_index;
@@ -4796,8 +4771,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
                     ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
                     ZEPHYR_TRY_ASSIGN(result,
-                                      binary_fast_or_fallback(fused_op, regs[src1], regs[src2], span));
-                    regs[dst] = result;
+                                      binary_fast_or_fallback(fused_op, current_frame.regs[src1], current_frame.regs[src2], span));
+                    current_frame.regs[dst] = result;
                     ++current_frame.ip_index;
                     break;
                 }
@@ -4811,8 +4786,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ZEPHYR_TRY_ASSIGN(src2, register_index(unpack_r_si_cmp_jump_false_src2(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(result,
                                       binary_fast_or_fallback(unpack_r_si_cmp_jump_false_compare_op(instruction.operand),
-                                                              regs[src1],
-                                                              regs[src2],
+                                                              current_frame.regs[src1],
+                                                              current_frame.regs[src2],
                                                               span));
                     if (!is_truthy(result)) {
                         current_frame.ip_index = static_cast<std::size_t>(metadata.jump_table.front());
@@ -4826,21 +4801,21 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ZEPHYR_TRY_ASSIGN(local_src, register_index(unpack_r_si_load_add_store_local_src(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(constant_value, load_bytecode_constant(chunk, unpack_r_si_load_add_store_constant(instruction.operand)));
                     ZEPHYR_TRY_ASSIGN(result,
-                                      binary_fast_or_fallback(BytecodeOp::R_ADD, regs[local_src], constant_value, span));
-                    regs[dst] = result;
+                                      binary_fast_or_fallback(BytecodeOp::R_ADD, current_frame.regs[local_src], constant_value, span));
+                    current_frame.regs[dst] = result;
                     ++current_frame.ip_index;
                     break;
                 }
                 case BytecodeOp::R_YIELD: {
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                    const Value yield_value = regs[src];
+                    const Value yield_value = current_frame.regs[src];
                     ZEPHYR_TRY(validate_handle_store(yield_value, HandleContainerKind::CoroutineFrame, span, module.name, "coroutine yield"));
                     ++current_frame.ip_index;
                     return finalize(yield_value, true);
                 }
                 case BytecodeOp::R_RETURN: {
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                    const Value result = regs[src];
+                    const Value result = current_frame.regs[src];
                     ZEPHYR_TRY(enforce_type(result, current_frame.return_type_name, span, module.name, "coroutine return"));
                     ++current_frame.ip_index;
                     return finalize(result, false);
@@ -7217,9 +7192,7 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
         root.stack.clear();
         root.locals.assign(root.bytecode ? static_cast<std::size_t>(std::max(root.bytecode->local_count, 0)) : 0, Value::nil());
         root.uses_register_mode = root.bytecode != nullptr && root.bytecode->uses_register_mode;
-        root.init_regs(root.bytecode ? static_cast<std::uint8_t>(std::min(
-                           static_cast<int>(std::max(root.bytecode->max_regs, root.bytecode->local_count)),
-                           static_cast<int>(std::numeric_limits<std::uint8_t>::max()))) : 0);
+        root.regs.assign(root.bytecode ? static_cast<std::size_t>(std::max(root.bytecode->max_regs, root.bytecode->local_count)) : 0, Value::nil());
         root.local_binding_owners.assign(root.locals.size(), nullptr);
         root.local_bindings.assign(root.locals.size(), nullptr);
         root.local_binding_versions.assign(root.locals.size(), 0);
@@ -7259,7 +7232,7 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
         reset_root.global_bindings.clear();
         reset_root.global_binding_versions.clear();
         reset_root.scope_stack.clear();
-        reset_root.clear_regs();
+        reset_root.regs.clear();
         reset_root.reg_cards.clear();
         reset_root.current_env = nullptr;
         reset_root.root_env = nullptr;
@@ -9201,7 +9174,7 @@ VoidResult Runtime::gc_verify_young() {
                     verify_error = "Young GC verification found a coroutine local set with mismatched remembered-card capacity.";
                     return;
                 }
-                if (frame.reg_cards.size() != value_card_count(frame.overflow_regs.size())) {
+                if (frame.reg_cards.size() != value_card_count(frame.regs.size())) {
                     verify_error = "Young GC verification found a coroutine register set with mismatched remembered-card capacity.";
                     return;
                 }
@@ -9430,12 +9403,12 @@ ZephyrVM::RuntimeStats Runtime::runtime_stats() const {
             for (const auto& frame : coroutine->frames) {
                 stats.coroutine.total_coroutine_stack_values += frame.stack.size();
                 stats.coroutine.total_coroutine_stack_capacity += frame.stack.capacity();
-                stats.coroutine.total_coroutine_local_slots += frame.locals.size() + frame.reg_count;
-                stats.coroutine.total_coroutine_local_capacity += frame.locals.capacity() + frame.reg_count;
+                stats.coroutine.total_coroutine_local_slots += frame.locals.size() + frame.regs.size();
+                stats.coroutine.total_coroutine_local_capacity += frame.locals.capacity() + frame.regs.capacity();
                 stats.coroutine.max_coroutine_stack_values =
                     std::max(stats.coroutine.max_coroutine_stack_values, frame.stack.size());
                 stats.coroutine.max_coroutine_local_slots =
-                    std::max(stats.coroutine.max_coroutine_local_slots, frame.locals.size() + static_cast<std::size_t>(frame.reg_count));
+                    std::max(stats.coroutine.max_coroutine_local_slots, frame.locals.size() + frame.regs.size());
             }
         });
     }
@@ -9761,7 +9734,7 @@ std::string Runtime::debug_dump_coroutines() const {
                 << " top_module=" << (top.module_name.empty() ? "<anonymous>" : top.module_name)
                 << " top_ip=" << (top.uses_register_mode ? top.ip_index : top.ip)
                 << " stack_size=" << top.stack.size()
-                << " local_slots=" << (top.locals.size() + top.reg_count)
+                << " local_slots=" << (top.locals.size() + top.regs.size())
                 << "\n";
             for (std::size_t frame_index = 0; frame_index < coroutine->frames.size(); ++frame_index) {
                 const auto& frame = coroutine->frames[frame_index];
@@ -9770,7 +9743,7 @@ std::string Runtime::debug_dump_coroutines() const {
                     << " ip=" << (frame.uses_register_mode ? frame.ip_index : frame.ip)
                     << " stack=" << frame.stack.size() << "/" << frame.stack.capacity()
                     << " locals=" << frame.locals.size() << "/" << frame.locals.capacity()
-                    << " regs=" << frame.reg_count << "/" << (frame.reg_count <= CoroutineFrameState::kInlineRegs ? CoroutineFrameState::kInlineRegs : CoroutineFrameState::kInlineRegs + frame.overflow_regs.capacity())
+                    << " regs=" << frame.regs.size() << "/" << frame.regs.capacity()
                     << " register_mode=" << (frame.uses_register_mode ? "true" : "false")
                     << " scopes=" << frame.scope_stack.size()
                     << "\n";

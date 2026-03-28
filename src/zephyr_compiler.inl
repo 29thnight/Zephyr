@@ -827,38 +827,12 @@ struct CoroutineFrameState {
     std::vector<std::uint64_t> global_binding_versions;
     std::vector<std::uint64_t> stack_cards;  // Phase 3.3: bitmap
     std::vector<std::uint64_t> local_cards;   // Phase 3.3: bitmap
-    std::vector<Value> overflow_regs;         // only used when reg_count > kInlineRegs
+    std::vector<Value> regs;
     std::vector<std::uint64_t> reg_cards;
-    // Hot execution-loop fields kept together for cache locality
     std::size_t ip = 0;
     std::size_t ip_index = 0;
     bool uses_register_mode = false;
     std::optional<std::size_t> pending_call_dst_reg;
-    // Opt①: inline register file — avoids heap allocation for ≤64 registers.
-    // Placed after hot control fields to avoid polluting their cache lines.
-    // Functions with >kInlineRegs registers fall back to overflow_regs (rare).
-    static constexpr int kInlineRegs = 64;
-    uint8_t reg_count = 0;
-    Value inline_regs[kInlineRegs];           // inline storage (nil-initialized via Value default ctor)
-
-    Value* reg_data() noexcept {
-        return reg_count <= kInlineRegs ? inline_regs : overflow_regs.data();
-    }
-    const Value* reg_data() const noexcept {
-        return reg_count <= kInlineRegs ? inline_regs : overflow_regs.data();
-    }
-    void init_regs(std::size_t n) {
-        reg_count = static_cast<uint8_t>(std::min<std::size_t>(n, 255u));
-        if (n <= static_cast<std::size_t>(kInlineRegs)) {
-            std::fill(inline_regs, inline_regs + n, Value::nil());
-        } else {
-            overflow_regs.assign(n, Value::nil());
-        }
-    }
-    void clear_regs() noexcept {
-        reg_count = 0;
-        overflow_regs.clear();
-    }
 };
 
 struct CoroutineObject final : GcObject {
@@ -872,7 +846,6 @@ struct CoroutineObject final : GcObject {
         frame.return_type_name = std::move(return_type_name);
         frame.uses_register_mode = frame.bytecode != nullptr && frame.bytecode->uses_register_mode;
         frame.ip_index = 0;
-        frames.reserve(4);  // Opt②: pre-allocate slots to avoid reallocation on nested calls
         frames.push_back(std::move(frame));
     }
     void trace(class Runtime& runtime) override;
@@ -2805,36 +2778,6 @@ template <typename T> struct GcRoutesToOldSmall : std::false_type {};
 template <> struct GcRoutesToOldSmall<Environment>    : std::true_type {};
 template <> struct GcRoutesToOldSmall<CoroutineObject> : std::true_type {};
 
-// Opt②: pool of reusable CoroutineFrameState objects to avoid repeated
-// heap allocations when coroutine frames are pushed/popped during nested calls.
-struct CoroutineFramePool {
-    static constexpr std::size_t kPoolSize = 64;
-    std::vector<CoroutineFrameState*> free_frames;
-
-    CoroutineFrameState* acquire() {
-        if (!free_frames.empty()) {
-            auto* f = free_frames.back();
-            free_frames.pop_back();
-            *f = CoroutineFrameState{};  // reset to clean state
-            return f;
-        }
-        return new CoroutineFrameState();
-    }
-
-    void release(CoroutineFrameState* f) {
-        if (f == nullptr) return;
-        if (free_frames.size() < kPoolSize) {
-            free_frames.push_back(f);
-        } else {
-            delete f;
-        }
-    }
-
-    ~CoroutineFramePool() {
-        for (auto* f : free_frames) delete f;
-    }
-};
-
 class Runtime {
 public:
     explicit Runtime(ZephyrVMConfig config = {});
@@ -3397,7 +3340,6 @@ private:
     std::unordered_map<ZephyrGuid128, std::uint32_t, Guid128Hash> stable_handle_lookup_;
     std::unordered_map<std::uint64_t, RetainedCallbackRecord> retained_callbacks_;
     std::unordered_map<std::uint64_t, CoroutineObject*> retained_coroutines_;
-    CoroutineFramePool coroutine_frame_pool_;  // Opt②
     ZephyrVMConfig config_{};
     ZephyrGcPhase gc_phase_ = ZephyrGcPhase::Idle;
     GcCollectionKind gc_collection_kind_ = GcCollectionKind::Full;
