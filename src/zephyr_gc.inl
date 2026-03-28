@@ -1037,11 +1037,13 @@ void Runtime::rebuild_coroutine_cards(CoroutineObject* coroutine) {
                 frame.local_cards[card_index / kGcCardsPerWord] |= (std::uint64_t(1) << (card_index % kGcCardsPerWord));
             }
         }
-        const std::size_t reg_cards = card_count_for_elements(frame.regs.size());
-        frame.reg_cards.assign(value_card_count(frame.regs.size()), 0);
-        for (std::size_t card_index = 0; card_index < reg_cards; ++card_index) {
-            if (value_card_has_young_reference(frame.regs, card_index)) {
-                frame.reg_cards[card_index / kGcCardsPerWord] |= (std::uint64_t(1) << (card_index % kGcCardsPerWord));
+        if (!frame.regs.empty()) {
+            const std::size_t reg_cards = card_count_for_elements(frame.regs.size());
+            frame.reg_cards.assign(value_card_count(frame.regs.size()), 0);
+            for (std::size_t card_index = 0; card_index < reg_cards; ++card_index) {
+                if (value_card_has_young_reference(frame.regs, card_index)) {
+                    frame.reg_cards[card_index / kGcCardsPerWord] |= (std::uint64_t(1) << (card_index % kGcCardsPerWord));
+                }
             }
         }
     }
@@ -4104,33 +4106,38 @@ void Runtime::compact_suspended_coroutine(CoroutineObject* coroutine) {
         return;
     }
 
-    std::size_t compacted_frames = 0;
-    std::size_t capacity_saved = 0;
-    for (auto& frame : coroutine->frames) {
-        capacity_saved += compact_vector_storage(frame.stack);
-        capacity_saved += compact_vector_storage(frame.locals);
-        capacity_saved += compact_vector_storage(frame.scope_stack);
-        capacity_saved += compact_vector_storage(frame.local_binding_owners);
-        capacity_saved += compact_vector_storage(frame.local_bindings);
-        capacity_saved += compact_vector_storage(frame.local_binding_versions);
-        capacity_saved += compact_vector_storage(frame.global_binding_owners);
-        capacity_saved += compact_vector_storage(frame.global_bindings);
-        capacity_saved += compact_vector_storage(frame.global_binding_versions);
-        capacity_saved += compact_vector_storage(frame.stack_cards);
-        capacity_saved += compact_vector_storage(frame.local_cards);
-        capacity_saved += compact_vector_storage(frame.regs);
-        capacity_saved += compact_vector_storage(frame.reg_cards);
-        ++compacted_frames;
+    // Skip shrink-to-fit for retained coroutines actively being resumed; they
+    // will be resumed soon and the alloc/dealloc churn hurts more than it helps.
+    if (!coroutine->handle_retained) {
+        std::size_t compacted_frames = 0;
+        std::size_t capacity_saved = 0;
+        for (auto& frame : coroutine->frames) {
+            capacity_saved += compact_vector_storage(frame.stack);
+            capacity_saved += compact_vector_storage(frame.locals);
+            capacity_saved += compact_vector_storage(frame.scope_stack);
+            capacity_saved += compact_vector_storage(frame.local_binding_owners);
+            capacity_saved += compact_vector_storage(frame.local_bindings);
+            capacity_saved += compact_vector_storage(frame.local_binding_versions);
+            capacity_saved += compact_vector_storage(frame.global_binding_owners);
+            capacity_saved += compact_vector_storage(frame.global_bindings);
+            capacity_saved += compact_vector_storage(frame.global_binding_versions);
+            capacity_saved += compact_vector_storage(frame.stack_cards);
+            capacity_saved += compact_vector_storage(frame.local_cards);
+            if (frame.uses_register_mode) {
+                capacity_saved += compact_vector_storage(frame.regs);
+                capacity_saved += compact_vector_storage(frame.reg_cards);
+            }
+            ++compacted_frames;
+        }
+        ++coroutine_compactions_;
+        coroutine_compacted_frames_ += compacted_frames;
+        coroutine_compacted_capacity_ += capacity_saved;
     }
 
     rebuild_coroutine_cards(coroutine);
     if (has_direct_young_reference(coroutine)) {
         remember_minor_owner(coroutine);
     }
-
-    ++coroutine_compactions_;
-    coroutine_compacted_frames_ += compacted_frames;
-    coroutine_compacted_capacity_ += capacity_saved;
 }
 
 RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_nested_coroutine_frame(CoroutineObject* coroutine, ModuleRecord& module,
