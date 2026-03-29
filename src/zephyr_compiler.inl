@@ -1,4 +1,4 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// Part of src/zephyr.cpp — included by zephyr.cpp
 enum class BytecodeOp {
     LoadConst,
     LoadLocal,
@@ -100,6 +100,10 @@ enum class BytecodeOp {
 
 struct BytecodeFunction;
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4201)
+#endif
 struct CompactInstruction {
     BytecodeOp op = BytecodeOp::LoadConst;
     union {
@@ -117,6 +121,9 @@ struct CompactInstruction {
 
     CompactInstruction() : operand(0) {}
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 static_assert(sizeof(CompactInstruction) <= 24, "CompactInstruction must stay hot and cache-friendly.");
 
@@ -624,7 +631,8 @@ inline std::string describe_bytecode_constant_literal(const BytecodeConstant& co
 
 struct ScriptFunctionObject final : GcObject {
     ScriptFunctionObject(std::string name, std::string module_name, std::vector<Param> params, std::optional<TypeRef> return_type, BlockStmt* body,
-                         Environment* closure, Span definition_span, std::shared_ptr<BytecodeFunction> bytecode = {})
+                         Environment* closure, Span definition_span, std::shared_ptr<BytecodeFunction> bytecode = {},
+                         std::vector<std::string> generic_params = {})
         : GcObject(ObjectKind::ScriptFunction),
           name(std::move(name)),
           module_name(std::move(module_name)),
@@ -633,7 +641,8 @@ struct ScriptFunctionObject final : GcObject {
           body(body),
           closure(closure),
           definition_span(definition_span),
-          bytecode(std::move(bytecode)) {}
+          bytecode(std::move(bytecode)),
+          generic_params(std::move(generic_params)) {}
 
     void trace(class Runtime& runtime) override;
 
@@ -646,6 +655,7 @@ struct ScriptFunctionObject final : GcObject {
     Span definition_span;
     std::shared_ptr<BytecodeFunction> bytecode;
     std::vector<UpvalueCellObject*> captured_upvalues;
+    std::vector<std::string> generic_params;  // Generic type parameters: <T, U, ...>
 };
 
 struct NativeFunctionObject final : GcObject {
@@ -833,6 +843,13 @@ struct CoroutineFrameState {
     std::size_t ip_index = 0;
     bool uses_register_mode = false;
     std::optional<std::size_t> pending_call_dst_reg;
+
+    // Step 3: Small inline register file — avoids heap allocation for common
+    // coroutines whose register count fits within kInlineRegs. Active when
+    // reg_count > 0 and regs.empty(); ignored otherwise.
+    static constexpr int kInlineRegs = 8;
+    std::uint8_t reg_count = 0;
+    Value inline_regs[kInlineRegs];
 };
 
 struct CoroutineObject final : GcObject {
@@ -3037,10 +3054,13 @@ private:
             Return,
             Break,
             Continue,
+            ErrorPropagate,
         };
 
         Kind kind = Kind::None;
+        std::string label;
         Value value = Value::nil();
+        bool is_propagated_error = false; // true when error should propagate up to caller
     };
 
     using FlowResult = RuntimeResult<FlowSignal>;
@@ -3084,7 +3104,7 @@ private:
         std::vector<std::string> imported_modules;
     };
 
-    std::shared_ptr<BytecodeFunction> compile_bytecode_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body);
+    std::shared_ptr<BytecodeFunction> compile_bytecode_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body, const std::vector<std::string>& generic_params = {});
     std::shared_ptr<BytecodeFunction> compile_module_bytecode(const std::string& name, Program* program);
     RuntimeResult<Value> execute_bytecode_chunk(const BytecodeFunction& chunk, const std::vector<Param>& params, Environment* call_env,
                                                 ModuleRecord& module, const Span& call_span,
@@ -3185,7 +3205,8 @@ private:
                                                                 BlockStmt* body,
                                                                 Environment* closure,
                                                                 std::shared_ptr<BytecodeFunction> bytecode,
-                                                                const Span& span);
+                                                                const Span& span,
+                                                                const std::vector<std::string>& generic_params = {});
     VoidResult ensure_capture_cells(Environment* environment, HandleContainerKind container, const Span& span, const std::string& module_name);
     VoidResult validate_closure_capture(Environment* environment, const Span& span, const std::string& module_name);
     Environment* module_or_root_environment(Environment* environment) const;
@@ -3410,7 +3431,7 @@ private:
     };
     std::unordered_map<std::string, ZephyrProfileEntry> profile_entries_;
     std::vector<ActiveProfileFrame> profile_stack_;
-    std::vector<GCPauseRecord> pause_records_;
+    std::deque<GCPauseRecord> pause_records_;
     std::vector<GCTraceEventRecord> gc_trace_events_;
     std::vector<CoroutineTraceEvent> coroutine_trace_events_;
     std::unordered_map<std::string, BytecodeCacheEntry> bytecode_cache_;
@@ -3974,13 +3995,13 @@ public:
         : disable_register_mode_(parent != nullptr ? parent->disable_register_mode_ : false), parent_(parent) {}
 
     std::shared_ptr<BytecodeFunction> compile(const std::string& name, const std::vector<Param>& params, BlockStmt* body,
-                                              bool is_coroutine_body = false) {
+                                              bool is_coroutine_body = false, const std::vector<std::string>& generic_params = {}) {
         if (!is_coroutine_body && !disable_register_mode_) {
-            if (auto compiled = try_compile_register_function(name, params, body, is_coroutine_body); compiled != nullptr) {
+            if (auto compiled = try_compile_register_function(name, params, body, is_coroutine_body, generic_params); compiled != nullptr) {
                 return compiled;
             }
         }
-        return compile_stack_function(name, params, body, is_coroutine_body);
+        return compile_stack_function(name, params, body, is_coroutine_body, generic_params);
     }
 
     std::shared_ptr<BytecodeFunction> compile_module(const std::string& name, Program* program) {
@@ -4110,12 +4131,14 @@ private:
             return block_contains_coroutine_constructs(block);
         }
         if (auto* if_stmt = dynamic_cast<IfStmt*>(stmt)) {
-            return expr_contains_coroutine_constructs(if_stmt->condition.get()) ||
+            return ((if_stmt->condition != nullptr && expr_contains_coroutine_constructs(if_stmt->condition.get())) ||
+                    (if_stmt->let_subject != nullptr && expr_contains_coroutine_constructs(if_stmt->let_subject.get()))) ||
                    stmt_contains_coroutine_constructs(if_stmt->then_branch.get()) ||
                    (if_stmt->else_branch != nullptr && stmt_contains_coroutine_constructs(if_stmt->else_branch.get()));
         }
         if (auto* while_stmt = dynamic_cast<WhileStmt*>(stmt)) {
-            return expr_contains_coroutine_constructs(while_stmt->condition.get()) ||
+            return ((while_stmt->condition != nullptr && expr_contains_coroutine_constructs(while_stmt->condition.get())) ||
+                    (while_stmt->let_subject != nullptr && expr_contains_coroutine_constructs(while_stmt->let_subject.get()))) ||
                    stmt_contains_coroutine_constructs(while_stmt->body.get());
         }
         if (auto* function_decl = dynamic_cast<FunctionDecl*>(stmt)) {
@@ -4154,7 +4177,24 @@ private:
         return false;
     }
 
-    void reset_function_state(const std::string& name, bool is_coroutine_body = false) {
+    // Helper: Apply type variable substitution from type_bindings_ to a TypeRef
+    TypeRef substitute_type(const TypeRef& type) const {
+        if (type.parts.empty()) {
+            return type;
+        }
+        // Check if the first part is a generic type parameter
+        const auto& first_part = type.parts[0];
+        const auto it = type_bindings_.find(first_part);
+        if (it != type_bindings_.end()) {
+            // If this is a generic parameter with a binding, use the bound type
+            // For now, simple substitution: if T is bound, return the bound TypeRef
+            return it->second;
+        }
+        // No substitution needed
+        return type;
+    }
+
+    void reset_function_state(const std::string& name, bool is_coroutine_body = false, const std::vector<std::string>& generic_params = {}) {
         function_ = std::make_shared<BytecodeFunction>();
         function_->name = name;
         function_->is_coroutine_body = is_coroutine_body;
@@ -4168,11 +4208,15 @@ private:
         local_scopes_.clear();
         loop_stack_.clear();
         register_allocator_ = RegisterAllocator{};
+        type_bindings_.clear();
+        for (const auto& generic_param : generic_params) {
+            type_bindings_[generic_param] = TypeRef{{generic_param}, Span{}};
+        }
     }
 
     std::shared_ptr<BytecodeFunction> compile_stack_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body,
-                                                             bool is_coroutine_body) {
-        reset_function_state(name, is_coroutine_body);
+                                                             bool is_coroutine_body, const std::vector<std::string>& generic_params = {}) {
+        reset_function_state(name, is_coroutine_body, generic_params);
         enter_local_scope();
         for (const Param& param : params) {
             define_local_slot(param.name);
@@ -4190,8 +4234,9 @@ private:
     std::shared_ptr<BytecodeFunction> try_compile_register_function(const std::string& name,
                                                                     const std::vector<Param>& params,
                                                                     BlockStmt* body,
-                                                                    bool is_coroutine_body) {
-        reset_function_state(name, is_coroutine_body);
+                                                                    bool is_coroutine_body,
+                                                                    const std::vector<std::string>& generic_params = {}) {
+        reset_function_state(name, is_coroutine_body, generic_params);
         function_->uses_register_mode = true;
         enter_local_scope();
         for (const Param& param : params) {
@@ -4302,6 +4347,7 @@ private:
     }
 
     struct LoopContext {
+        std::string label;
         std::size_t scope_depth = 0;
         int continue_target = -1;
         std::vector<int> break_jumps;
@@ -4406,6 +4452,28 @@ private:
             }
             return;
         }
+        if (auto* struct_pattern = dynamic_cast<StructPattern*>(pattern)) {
+            for (auto& field : struct_pattern->fields) {
+                collect_pattern_binding_names(field.pattern.get(), names);
+            }
+            return;
+        }
+        if (auto* array_pattern = dynamic_cast<ArrayPattern*>(pattern)) {
+            for (auto& element : array_pattern->elements) {
+                collect_pattern_binding_names(element.get(), names);
+            }
+            if (array_pattern->has_rest && !array_pattern->rest_name.empty() && array_pattern->rest_name != "_" &&
+                std::find(names.begin(), names.end(), array_pattern->rest_name) == names.end()) {
+                names.push_back(array_pattern->rest_name);
+            }
+            return;
+        }
+        if (auto* tuple_pattern = dynamic_cast<TuplePattern*>(pattern)) {
+            for (auto& element : tuple_pattern->elements) {
+                collect_pattern_binding_names(element.get(), names);
+            }
+            return;
+        }
         if (auto* or_pattern = dynamic_cast<OrPattern*>(pattern)) {
             if (!or_pattern->alternatives.empty()) {
                 collect_pattern_binding_names(or_pattern->alternatives.front().get(), names);
@@ -4430,11 +4498,19 @@ private:
         }
     }
 
-    LoopContext* current_loop() {
+    LoopContext* current_loop(const std::string& label = {}) {
         if (loop_stack_.empty()) {
             return nullptr;
         }
-        return &loop_stack_.back();
+        if (label.empty()) {
+            return &loop_stack_.back();
+        }
+        for (auto it = loop_stack_.rbegin(); it != loop_stack_.rend(); ++it) {
+            if (it->label == label) {
+                return &(*it);
+            }
+        }
+        return nullptr;
     }
 
     int define_local_slot(const std::string& name) {
@@ -4698,6 +4774,10 @@ private:
             return compile_expr_r(group->inner.get());
         }
         if (auto* unary = dynamic_cast<UnaryExpr*>(expr)) {
+            if (unary->op == TokenType::Question) {
+                fail_register_compile();
+                return std::nullopt;
+            }
             const auto src = compile_expr_r(unary->right.get());
             if (!src.has_value()) {
                 return std::nullopt;
@@ -4838,6 +4918,10 @@ private:
             return;
         }
         if (auto* let_stmt = dynamic_cast<LetStmt*>(stmt)) {
+            if (let_stmt->pattern != nullptr) {
+                fail_register_compile();
+                return;
+            }
             const auto value_reg = compile_expr_r(let_stmt->initializer.get());
             if (!value_reg.has_value()) {
                 return;
@@ -4851,6 +4935,10 @@ private:
             return;
         }
         if (auto* if_stmt = dynamic_cast<IfStmt*>(stmt)) {
+            if (if_stmt->let_pattern != nullptr) {
+                fail_register_compile();
+                return;
+            }
             const auto condition = compile_expr_r(if_stmt->condition.get());
             if (!condition.has_value()) {
                 return;
@@ -4867,8 +4955,12 @@ private:
             return;
         }
         if (auto* while_stmt = dynamic_cast<WhileStmt*>(stmt)) {
+            if (while_stmt->let_pattern != nullptr) {
+                fail_register_compile();
+                return;
+            }
             const int loop_start = static_cast<int>(function_->instructions.size());
-            loop_stack_.push_back(LoopContext{local_scopes_.size(), loop_start});
+            loop_stack_.push_back(LoopContext{while_stmt->label, local_scopes_.size(), loop_start});
             const auto condition = compile_expr_r(while_stmt->condition.get());
             if (!condition.has_value()) {
                 return;
@@ -4891,7 +4983,7 @@ private:
             return;
         }
         if (auto* break_stmt = dynamic_cast<BreakStmt*>(stmt)) {
-            auto* loop = current_loop();
+            auto* loop = current_loop(break_stmt->label);
             if (loop == nullptr) {
                 fail_register_compile();
                 return;
@@ -4900,7 +4992,7 @@ private:
             return;
         }
         if (auto* continue_stmt = dynamic_cast<ContinueStmt*>(stmt)) {
-            auto* loop = current_loop();
+            auto* loop = current_loop(continue_stmt->label);
             if (loop == nullptr) {
                 fail_register_compile();
                 return;
@@ -5011,6 +5103,46 @@ private:
             return;
         }
         if (auto* let_stmt = dynamic_cast<LetStmt*>(stmt)) {
+            if (let_stmt->pattern != nullptr) {
+                compile_expr(let_stmt->initializer.get());
+
+                std::vector<std::string> binding_names;
+                std::vector<std::int32_t> binding_slots;
+                collect_pattern_binding_names(let_stmt->pattern.get(), binding_names);
+                if (use_local_slots_) {
+                    binding_slots.reserve(binding_names.size());
+                    for (const auto& binding_name : binding_names) {
+                        binding_slots.push_back(define_local_slot(binding_name));
+                    }
+                }
+
+                emit(BytecodeOp::BindPattern,
+                     let_stmt->span,
+                     0,
+                     {},
+                     std::nullopt,
+                     false,
+                     nullptr,
+                     nullptr,
+                     std::move(binding_names),
+                     let_stmt->pattern.get());
+                function_->metadata.back().jump_table = std::move(binding_slots);
+
+                const int fail_jump = emit_jump(BytecodeOp::JumpIfFalse, let_stmt->span);
+                emit(BytecodeOp::Pop, let_stmt->span);
+                const int end_jump = emit_jump(BytecodeOp::Jump, let_stmt->span);
+
+                patch_jump(fail_jump);
+                emit(BytecodeOp::Pop, let_stmt->span);
+                if (let_stmt->else_branch) {
+                    compile_stmt(let_stmt->else_branch.get());
+                } else {
+                    emit(BytecodeOp::Fail, let_stmt->span, 0, "let pattern did not match.");
+                }
+                patch_jump(end_jump);
+                return;
+            }
+
             compile_expr(let_stmt->initializer.get());
             emit_define_symbol(let_stmt->name,
                                let_stmt->span,
@@ -5069,6 +5201,61 @@ private:
             return;
         }
         if (auto* if_stmt = dynamic_cast<IfStmt*>(stmt)) {
+            if (if_stmt->let_pattern != nullptr) {
+                const std::string subject_name = make_temp_name("__zephyr_iflet_subject_");
+
+                enter_local_scope();
+                emit(BytecodeOp::EnterScope, if_stmt->span);
+                compile_expr(if_stmt->let_subject.get());
+                emit_define_symbol(subject_name, if_stmt->span);
+
+                enter_local_scope();
+                emit(BytecodeOp::EnterScope, if_stmt->span);
+
+                std::vector<std::string> binding_names;
+                std::vector<std::int32_t> binding_slots;
+                collect_pattern_binding_names(if_stmt->let_pattern.get(), binding_names);
+                if (use_local_slots_) {
+                    binding_slots.reserve(binding_names.size());
+                    for (const auto& binding_name : binding_names) {
+                        binding_slots.push_back(define_local_slot(binding_name));
+                    }
+                }
+
+                emit_load_symbol(subject_name, if_stmt->span);
+                emit(BytecodeOp::BindPattern,
+                     if_stmt->span,
+                     0,
+                     {},
+                     std::nullopt,
+                     false,
+                     nullptr,
+                     nullptr,
+                     std::move(binding_names),
+                     if_stmt->let_pattern.get());
+                function_->metadata.back().jump_table = std::move(binding_slots);
+                const int false_jump = emit_jump(BytecodeOp::JumpIfFalsePop, if_stmt->span);
+
+                compile_stmt(if_stmt->then_branch.get());
+                emit(BytecodeOp::ExitScope, if_stmt->span);
+                exit_local_scope();
+                const int end_jump = emit_jump(BytecodeOp::Jump, if_stmt->span);
+
+                const int else_target = static_cast<int>(function_->instructions.size());
+                patch_jump_to(false_jump, else_target);
+                emit(BytecodeOp::ExitScope, if_stmt->span);
+                exit_local_scope();
+
+                if (if_stmt->else_branch) {
+                    compile_stmt(if_stmt->else_branch.get());
+                }
+                patch_jump(end_jump);
+
+                emit(BytecodeOp::ExitScope, if_stmt->span);
+                exit_local_scope();
+                return;
+            }
+
             compile_expr(if_stmt->condition.get());
             const int false_jump = emit_jump(BytecodeOp::JumpIfFalse, if_stmt->span);
             emit(BytecodeOp::Pop, if_stmt->span);
@@ -5083,8 +5270,75 @@ private:
             return;
         }
         if (auto* while_stmt = dynamic_cast<WhileStmt*>(stmt)) {
+            if (while_stmt->let_pattern != nullptr) {
+                const std::string subject_name = make_temp_name("__zephyr_whilelet_subject_");
+                const int loop_start = static_cast<int>(function_->instructions.size());
+                loop_stack_.push_back(LoopContext{while_stmt->label, local_scopes_.size(), -1});
+
+                enter_local_scope();
+                emit(BytecodeOp::EnterScope, while_stmt->span);
+                compile_expr(while_stmt->let_subject.get());
+                emit_define_symbol(subject_name, while_stmt->span);
+
+                enter_local_scope();
+                emit(BytecodeOp::EnterScope, while_stmt->span);
+
+                std::vector<std::string> binding_names;
+                std::vector<std::int32_t> binding_slots;
+                collect_pattern_binding_names(while_stmt->let_pattern.get(), binding_names);
+                if (use_local_slots_) {
+                    binding_slots.reserve(binding_names.size());
+                    for (const auto& binding_name : binding_names) {
+                        binding_slots.push_back(define_local_slot(binding_name));
+                    }
+                }
+
+                emit_load_symbol(subject_name, while_stmt->span);
+                emit(BytecodeOp::BindPattern,
+                     while_stmt->span,
+                     0,
+                     {},
+                     std::nullopt,
+                     false,
+                     nullptr,
+                     nullptr,
+                     std::move(binding_names),
+                     while_stmt->let_pattern.get());
+                function_->metadata.back().jump_table = std::move(binding_slots);
+                const int exit_jump = emit_jump(BytecodeOp::JumpIfFalsePop, while_stmt->span);
+
+                compile_stmt(while_stmt->body.get());
+
+                emit(BytecodeOp::ExitScope, while_stmt->span);
+                exit_local_scope();
+                emit(BytecodeOp::ExitScope, while_stmt->span);
+                exit_local_scope();
+
+                const int back_jump = emit_jump(BytecodeOp::Jump, while_stmt->span);
+                patch_jump_to(back_jump, loop_start);
+
+                const auto loop_context = loop_stack_.back();
+                loop_stack_.pop_back();
+                for (const int jump_index : loop_context.continue_jumps) {
+                    patch_jump_to(jump_index, loop_start);
+                }
+
+                const int loop_exit_target = static_cast<int>(function_->instructions.size());
+                patch_jump_to(exit_jump, loop_exit_target);
+                emit(BytecodeOp::ExitScope, while_stmt->span);
+                exit_local_scope();
+                emit(BytecodeOp::ExitScope, while_stmt->span);
+                exit_local_scope();
+
+                const int break_target = static_cast<int>(function_->instructions.size());
+                for (const int jump_index : loop_context.break_jumps) {
+                    patch_jump_to(jump_index, break_target);
+                }
+                return;
+            }
+
             const int loop_start = static_cast<int>(function_->instructions.size());
-            loop_stack_.push_back(LoopContext{local_scopes_.size(), loop_start});
+            loop_stack_.push_back(LoopContext{while_stmt->label, local_scopes_.size(), loop_start});
             compile_expr(while_stmt->condition.get());
             const int exit_jump = emit_jump(BytecodeOp::JumpIfFalse, while_stmt->span);
             emit(BytecodeOp::Pop, while_stmt->span);
@@ -5112,7 +5366,7 @@ private:
             emit_define_symbol(index_name, for_stmt->span, std::string("Int"), true);
 
             const int loop_start = static_cast<int>(function_->instructions.size());
-            loop_stack_.push_back(LoopContext{local_scopes_.size(), -1});
+            loop_stack_.push_back(LoopContext{for_stmt->label, local_scopes_.size(), -1});
             emit_load_symbol(index_name, for_stmt->span);
             emit_load_symbol(iter_name, for_stmt->span);
             emit(BytecodeOp::ArrayLength, for_stmt->span);
@@ -5156,7 +5410,7 @@ private:
             return;
         }
         if (auto* break_stmt = dynamic_cast<BreakStmt*>(stmt)) {
-            auto* loop = current_loop();
+            auto* loop = current_loop(break_stmt->label);
             if (loop == nullptr) {
                 emit(BytecodeOp::Fail, break_stmt->span, 0, "break used outside loop.");
                 return;
@@ -5166,7 +5420,7 @@ private:
             return;
         }
         if (auto* continue_stmt = dynamic_cast<ContinueStmt*>(stmt)) {
-            auto* loop = current_loop();
+            auto* loop = current_loop(continue_stmt->label);
             if (loop == nullptr) {
                 emit(BytecodeOp::Fail, continue_stmt->span, 0, "continue used outside loop.");
                 return;
@@ -5285,6 +5539,43 @@ private:
             return;
         }
         if (auto* unary = dynamic_cast<UnaryExpr*>(expr)) {
+            if (unary->op == TokenType::Question) {
+                // Error propagation lowering:
+                // 1. Evaluate the Result-like value
+                // 2. If Ok(v), push v onto stack and continue
+                // 3. If Err(e), return the entire Result::Err(e) immediately (propagate error)
+                const std::string subject_name = make_temp_name("__zephyr_try_subject_");
+                compile_expr(unary->right.get());
+                emit_define_symbol(subject_name, unary->span);
+
+                // Check for Ok variant
+                emit_load_symbol(subject_name, unary->span);
+                emit(BytecodeOp::IsEnumVariant, unary->span, 1, "Result", "Ok");
+                const int ok_miss_jump = emit_jump(BytecodeOp::JumpIfFalsePop, unary->span);
+                // Ok case: load and push the payload
+                emit_load_symbol(subject_name, unary->span);
+                emit(BytecodeOp::LoadEnumPayload, unary->span, 0);
+                const int end_jump = emit_jump(BytecodeOp::Jump, unary->span);
+
+                // Check for Err variant
+                const int err_check = static_cast<int>(function_->instructions.size());
+                patch_jump_to(ok_miss_jump, err_check);
+                emit_load_symbol(subject_name, unary->span);
+                emit(BytecodeOp::IsEnumVariant, unary->span, 1, "Result", "Err");
+                const int not_err_jump = emit_jump(BytecodeOp::JumpIfFalsePop, unary->span);
+                // Err case: return the entire Result::Err value (propagate error)
+                emit_load_symbol(subject_name, unary->span);
+                emit(BytecodeOp::Return, unary->span);
+
+                // Invalid case: neither Ok nor Err
+                const int bad_case = static_cast<int>(function_->instructions.size());
+                patch_jump_to(not_err_jump, bad_case);
+                emit(BytecodeOp::Fail, unary->span, 0, "'?': expects Result::Ok/Err.");
+
+                const int end_target = static_cast<int>(function_->instructions.size());
+                patch_jump_to(end_jump, end_target);
+                return;
+            }
             compile_expr(unary->right.get());
             if (unary->op == TokenType::Bang) {
                 emit(BytecodeOp::Not, unary->span);
@@ -5618,6 +5909,7 @@ private:
     int temp_counter_ = 0;
     int next_slot_ = 0;
     std::unordered_map<std::string, std::uint8_t> cached_literal_regs_;
+    std::unordered_map<std::string, TypeRef> type_bindings_;  // Generic type parameter bindings: T -> Int, U -> String, etc.
     bool disable_register_mode_ = false;
     bool use_local_slots_ = true;
     bool allow_return_ = true;
