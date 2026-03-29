@@ -1,0 +1,30 @@
+// 14_iterator.zph — Custom iterator protocol
+
+struct Counter { val: int, limit: int }
+impl Counter {
+    fn has_next(self) -> bool { return self.val < self.limit; }
+    fn next(self) -> int {
+        let v = self.val;
+        self.val = self.val + 1;
+        return v;
+    }
+}
+
+fn sum_counter(limit: int) -> int {
+    let c = Counter { val: 0, limit: limit };
+    let mut total: int = 0;
+    for x in c {
+        total = total + x;
+    }
+    return total;
+}
+
+fn main() {
+    assert(sum_counter(5) == 10);  // 0+1+2+3+4 = 10
+
+    // Array for-in still works
+    let arr = [10, 20, 30];
+    let mut s: int = 0;
+    for v in arr { s = s + v; }
+    assert(s == 60);
+}

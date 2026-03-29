@@ -232,5 +232,8 @@ void test_std_collections_hashmap();
 void test_assoc_fn_syntax();
 void test_collections_set_method();
 void test_collections_queue_method();
+void test_custom_iterator();
+void test_range_iterator();
+void test_better_error_message();
 
 }  // namespace zephyr_tests

@@ -386,6 +386,13 @@ struct Environment final : GcObject {
     std::unordered_map<std::string, std::size_t> binding_slots;
     std::vector<std::uint64_t> remembered_cards;  // Phase 3.3: bitmap (1 bit = 1 card granule)
     std::unordered_map<std::string, Binding> values;
+
+    void collect_names(std::vector<std::string>& out) const {
+        for (const auto& [name, _] : values) {
+            out.push_back(name);
+        }
+        if (parent) parent->collect_names(out);
+    }
 };
 
 struct UpvalueCellObject final : GcObject {

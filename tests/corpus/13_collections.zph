@@ -28,9 +28,11 @@ fn test_queue() {
 }
 
 fn test_range_map() {
-    let r = range(0, 3);
-    assert(r[0] == 0);
-    assert(r[2] == 2);
+    let mut total: int = 0;
+    for i in range(0, 3) {
+        total = total + i;
+    }
+    assert(total == 3);  // 0+1+2 = 3
 }
 
 fn main() {

@@ -21,6 +21,7 @@ void test_corpus_scripts() {
         {corpus_root / "09_modules.zph", "ok"},
         {corpus_root / "12_std_json.zph", ""},
         {corpus_root / "13_collections.zph", ""},
+        {corpus_root / "14_iterator.zph", ""},
     };
 
     for (const auto& corpus_case : cases) {

@@ -27,6 +27,8 @@ enum class BytecodeOp {
     GreaterEqual,
     BuildArray,
     ArrayLength,
+    IterHasNext,
+    IterNext,
     LoadMember,
     StoreMember,
     LoadIndex,
@@ -546,6 +548,8 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::BuildStruct: return "BuildStruct";
         case BytecodeOp::BuildEnum: return "BuildEnum";
         case BytecodeOp::ArrayLength: return "ArrayLength";
+        case BytecodeOp::IterHasNext: return "IterHasNext";
+        case BytecodeOp::IterNext: return "IterNext";
         case BytecodeOp::IsEnumVariant: return "IsEnumVariant";
         case BytecodeOp::LoadEnumPayload: return "LoadEnumPayload";
         case BytecodeOp::Equal: return "Equal";
@@ -929,6 +933,7 @@ struct ModuleRecord {
     std::uint64_t file_mtime = 0;
     bool loaded = false;
     bool loading = false;
+    std::string source_text;   // original source for error display
 };
 
 struct BytecodeCacheEntry {
@@ -3241,7 +3246,7 @@ private:
     void record_coroutine_destroyed(CoroutineObject* coroutine);
 
     Binding* lookup_binding(Environment* environment, const std::string& name);
-    RuntimeResult<Value> lookup_value(Environment* environment, const std::string& name, const Span& span, const std::string& module_name);
+    RuntimeResult<Value> lookup_value(Environment* environment, const std::string& name, const Span& span, const std::string& module_name, const std::vector<std::string>& extra_hint_names = {});
     VoidResult assign_value(Environment* environment, const std::string& name, Value value, const Span& span, const std::string& module_name);
     bool is_truthy(const Value& value) const;
     bool values_equal(const Value& left, const Value& right) const;
@@ -5472,32 +5477,26 @@ private:
             emit_define_symbol(index_name, for_stmt->span, std::string("int"), true);
 
             const int loop_start = static_cast<int>(function_->instructions.size());
-            loop_stack_.push_back(LoopContext{for_stmt->label, local_scopes_.size(), -1});
-            emit_load_symbol(index_name, for_stmt->span);
+            loop_stack_.push_back(LoopContext{for_stmt->label, local_scopes_.size(), loop_start});
             emit_load_symbol(iter_name, for_stmt->span);
-            emit(BytecodeOp::ArrayLength, for_stmt->span);
-            emit(BytecodeOp::Less, for_stmt->span);
+            emit_load_symbol(index_name, for_stmt->span);
+            emit(BytecodeOp::IterHasNext, for_stmt->span);
             const int exit_jump = emit_jump(BytecodeOp::JumpIfFalse, for_stmt->span);
-            emit(BytecodeOp::Pop, for_stmt->span);
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop bool (true path)
 
             enter_local_scope();
             emit(BytecodeOp::EnterScope, for_stmt->span);
-            emit_load_symbol(iter_name, for_stmt->span);
-            emit_load_symbol(index_name, for_stmt->span);
-            emit(BytecodeOp::LoadIndex, for_stmt->span);
-            emit_define_symbol(for_stmt->name, for_stmt->span, std::nullopt, true);
+            emit(BytecodeOp::IterNext, for_stmt->span);  // pops [iter, index], pushes [iter, new_index, elem]
+            emit_define_symbol(for_stmt->name, for_stmt->span, std::nullopt, true);  // pops elem
+            emit_store_symbol(index_name, for_stmt->span);  // pops new_index, stores, pushes back
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop pushed-back new_index
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop iter
             for (auto& statement : for_stmt->body->statements) {
                 compile_stmt(statement.get());
             }
             emit(BytecodeOp::ExitScope, for_stmt->span);
             exit_local_scope();
 
-            loop_stack_.back().continue_target = static_cast<int>(function_->instructions.size());
-            emit_load_symbol(index_name, for_stmt->span);
-            emit_constant(BytecodeConstant{static_cast<std::int64_t>(1)}, for_stmt->span);
-            emit(BytecodeOp::Add, for_stmt->span);
-            emit_store_symbol(index_name, for_stmt->span);
-            emit(BytecodeOp::Pop, for_stmt->span);
             emit(BytecodeOp::Jump, for_stmt->span, loop_start);
 
             const auto loop_context = loop_stack_.back();
@@ -5506,7 +5505,9 @@ private:
                 patch_jump_to(jump_index, loop_context.continue_target);
             }
             patch_jump(exit_jump);
-            emit(BytecodeOp::Pop, for_stmt->span);
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop bool (false)
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop index
+            emit(BytecodeOp::Pop, for_stmt->span);  // pop iter
             const int break_target = static_cast<int>(function_->instructions.size());
             for (const int jump_index : loop_context.break_jumps) {
                 patch_jump_to(jump_index, break_target);

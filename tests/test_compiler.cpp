@@ -1793,4 +1793,80 @@ void test_collections_queue_method() {
     require(result.is_string() && result.as_string() == "first", "test_collections_queue_method: expected 'first'");
 }
 
+void test_custom_iterator() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            struct Counter { n: int, max: int }
+            impl Counter {
+                fn has_next(self) -> bool { return self.n < self.max; }
+                fn next(self) -> int {
+                    let v = self.n;
+                    self.n = self.n + 1;
+                    return v;
+                }
+            }
+            export fn run() -> int {
+                let c = Counter { n: 0, max: 3 };
+                let mut sum: int = 0;
+                for x in c {
+                    sum = sum + x;
+                }
+                return sum;
+            }
+        )",
+        "unit_custom_iter",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_custom_iter", "run");
+    require(handle.has_value(), "test_custom_iterator: missing run handle");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 3,
+            "test_custom_iterator: expected 3 (0+1+2)");
+}
+
+void test_range_iterator() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { range } from "std/collections";
+            export fn run() -> int {
+                let mut total: int = 0;
+                for i in range(1, 5) {
+                    total = total + i;
+                }
+                return total;
+            }
+        )",
+        "unit_range_iter",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_range_iter", "run");
+    require(handle.has_value(), "test_range_iterator: missing run handle");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 10,
+            "test_range_iterator: expected 10 (1+2+3+4)");
+}
+
+void test_better_error_message() {
+    zephyr::ZephyrVM vm;
+    bool error_thrown = false;
+    std::string error_msg;
+    try {
+        vm.execute_string(
+            R"(
+                fn greet(name: string) -> string { return "hi " + name; }
+                greeet("world");
+            )",
+            "unit_better_error",
+            std::filesystem::current_path());
+    } catch (const std::exception& e) {
+        error_thrown = true;
+        error_msg = e.what();
+    }
+    require(error_thrown, "test_better_error_message: expected error to be thrown");
+    require(error_msg.find("greet") != std::string::npos,
+            "test_better_error_message: error should contain 'greet' hint, got: " + error_msg);
+}
+
 }  // namespace zephyr_tests

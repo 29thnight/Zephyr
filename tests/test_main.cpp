@@ -110,6 +110,9 @@ int main() {
         test_assoc_fn_syntax();
         test_collections_set_method();
         test_collections_queue_method();
+        test_custom_iterator();
+        test_range_iterator();
+        test_better_error_message();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

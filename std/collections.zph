@@ -1,9 +1,23 @@
 // std/collections.zph — Collections with Rust-like method syntax
 
-// ─── Array utilities ─────────────────────────────────────────────────────────
+// ─── Range iterator ───────────────────────────────────────────────────────────
 
-export fn range(start: int, end: int) -> Array {
-    return __zephyr_std_range(start, end);
+export struct Range { current: int, stop: int }
+
+export impl Range {
+    fn new(start: int, stop: int) -> Range {
+        return Range { current: start, stop: stop };
+    }
+    fn has_next(self) -> bool { return self.current < self.stop; }
+    fn next(self) -> int {
+        let val = self.current;
+        self.current = self.current + 1;
+        return val;
+    }
+}
+
+export fn range(start: int, stop: int) -> Range {
+    return Range::new(start, stop);
 }
 
 export fn map_array(arr: Array, f: Function) -> Array {

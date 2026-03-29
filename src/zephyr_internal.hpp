@@ -221,6 +221,80 @@ inline std::string format_location(const std::string& module_name, const Span& s
     return out.str();
 }
 
+// Extract the source line and build a caret pointer for error display.
+// Returns a 3-line string: "  N | source_line\n    | ^^^^^\n"
+inline std::string format_source_context(const std::string& source_text, const Span& span,
+                                          std::size_t highlight_len = 1) {
+    if (source_text.empty()) return {};
+
+    // Find the start of the line
+    std::size_t pos = 0;
+    std::size_t current_line = 1;
+    while (pos < source_text.size() && current_line < span.line) {
+        if (source_text[pos] == '\n') ++current_line;
+        ++pos;
+    }
+
+    // Find end of the line
+    std::size_t line_start = pos;
+    std::size_t line_end = pos;
+    while (line_end < source_text.size() && source_text[line_end] != '\n') ++line_end;
+
+    std::string source_line = source_text.substr(line_start, line_end - line_start);
+
+    // Build output
+    std::ostringstream out;
+    const std::string line_num = std::to_string(span.line);
+    const std::string indent(line_num.size(), ' ');
+
+    out << "  " << line_num << " | " << source_line << "\n";
+    out << "  " << indent << " | ";
+
+    // Add spaces up to the column
+    const std::size_t col = (span.column > 0) ? span.column - 1 : 0;
+    for (std::size_t i = 0; i < col && i < source_line.size(); ++i) {
+        out << (source_line[i] == '\t' ? '\t' : ' ');
+    }
+
+    // Add carets
+    const std::size_t caret_len = std::min(highlight_len, source_line.size() > col ? source_line.size() - col : static_cast<std::size_t>(1));
+    for (std::size_t i = 0; i < std::max(caret_len, static_cast<std::size_t>(1)); ++i) out << '^';
+    out << "\n";
+
+    return out.str();
+}
+
+// Returns the closest name from `candidates` to `name` if within edit distance 2.
+// Uses simple Levenshtein distance.
+inline std::optional<std::string> suggest_similar_name(
+    const std::string& name,
+    const std::vector<std::string>& candidates)
+{
+    auto edit_distance = [](const std::string& a, const std::string& b) -> std::size_t {
+        const std::size_t m = a.size(), n = b.size();
+        std::vector<std::vector<std::size_t>> dp(m + 1, std::vector<std::size_t>(n + 1));
+        for (std::size_t i = 0; i <= m; ++i) dp[i][0] = i;
+        for (std::size_t j = 0; j <= n; ++j) dp[0][j] = j;
+        for (std::size_t i = 1; i <= m; ++i)
+            for (std::size_t j = 1; j <= n; ++j)
+                dp[i][j] = (a[i-1] == b[j-1]) ? dp[i-1][j-1]
+                          : 1 + std::min({dp[i-1][j], dp[i][j-1], dp[i-1][j-1]});
+        return dp[m][n];
+    };
+
+    std::optional<std::string> best;
+    std::size_t best_dist = 3;  // only suggest if distance <= 2
+    for (const auto& candidate : candidates) {
+        if (candidate == name) continue;
+        const auto dist = edit_distance(name, candidate);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
 constexpr const char* kSerializedEnvelopeType = "ZephyrSaveEnvelope";
 constexpr const char* kSerializedNodeType = "ZephyrSaveNode";
 constexpr const char* kSerializedFieldMapType = "ZephyrSaveFields";

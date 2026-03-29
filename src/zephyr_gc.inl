@@ -3072,7 +3072,28 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
         if (slot < global_bindings.size() && global_bindings[slot] != nullptr) {
             return read_binding_value(*global_bindings[slot]);
         }
-        return make_loc_error<Value>(module.name, span, "Unknown identifier '" + chunk.global_names[slot] + "'.");
+        const std::string& missing = chunk.global_names[slot];
+        std::vector<std::string> initialized_names;
+        for (std::size_t i = 0; i < chunk.global_names.size(); ++i) {
+            if (i < global_bindings.size() && global_bindings[i] != nullptr) {
+                initialized_names.push_back(chunk.global_names[i]);
+            }
+        }
+        if (current_env != nullptr) {
+            current_env->collect_names(initialized_names);
+        }
+        std::string source_text;
+        auto mod_it = modules_.find(module.name);
+        if (mod_it != modules_.end()) {
+            source_text = mod_it->second.source_text;
+        }
+        std::string context = format_source_context(source_text, span, missing.size());
+        std::string message = context + "Unknown identifier '" + missing + "'.";
+        const auto suggestion = suggest_similar_name(missing, initialized_names);
+        if (suggestion) {
+            message += "\nhint: did you mean '" + *suggestion + "'?";
+        }
+        return make_loc_error<Value>(module.name, span, message);
     };
 
     auto assign_cached_binding =
@@ -3522,7 +3543,7 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
                     ++ip;
                     break;
                 }
-                ZEPHYR_TRY_ASSIGN(value, lookup_value(current_env, metadata.string_operand, span, module.name));
+                ZEPHYR_TRY_ASSIGN(value, lookup_value(current_env, metadata.string_operand, span, module.name, chunk.global_names));
                 stack.push_back(value);
                 ++ip;
                 break;
@@ -3887,6 +3908,42 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
                 }
                 auto* array = static_cast<ArrayObject*>(value.as_object());
                 stack.push_back(Value::integer(static_cast<std::int64_t>(array->elements.size())));
+                ++ip;
+                break;
+            }
+            case BytecodeOp::IterHasNext: {
+                ZEPHYR_TRY_ASSIGN(index, pop_value(span));
+                ZEPHYR_TRY_ASSIGN(iterable, pop_value(span));
+                if (iterable.is_object() && iterable.as_object()->kind == ObjectKind::Array) {
+                    auto* arr = static_cast<ArrayObject*>(iterable.as_object());
+                    const bool has = index.as_int() < static_cast<std::int64_t>(arr->elements.size());
+                    stack.push_back(iterable);
+                    stack.push_back(index);
+                    stack.push_back(Value::boolean(has));
+                } else {
+                    stack.push_back(iterable);
+                    stack.push_back(index);
+                    ZEPHYR_TRY_ASSIGN(result, call_member_value(iterable, "has_next", {}, span, module.name));
+                    stack.push_back(result);
+                }
+                ++ip;
+                break;
+            }
+            case BytecodeOp::IterNext: {
+                ZEPHYR_TRY_ASSIGN(index, pop_value(span));
+                ZEPHYR_TRY_ASSIGN(iterable, pop_value(span));
+                if (iterable.is_object() && iterable.as_object()->kind == ObjectKind::Array) {
+                    auto* arr = static_cast<ArrayObject*>(iterable.as_object());
+                    const Value elem = arr->elements[static_cast<std::size_t>(index.as_int())];
+                    stack.push_back(iterable);
+                    stack.push_back(Value::integer(index.as_int() + 1));
+                    stack.push_back(elem);
+                } else {
+                    ZEPHYR_TRY_ASSIGN(elem, call_member_value(iterable, "next", {}, span, module.name));
+                    stack.push_back(iterable);
+                    stack.push_back(index);
+                    stack.push_back(elem);
+                }
                 ++ip;
                 break;
             }
@@ -5651,7 +5708,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ++current_frame.ip;
                     break;
                 }
-                ZEPHYR_TRY_ASSIGN(value, lookup_value(current_frame.current_env, metadata.string_operand, span, module.name));
+                ZEPHYR_TRY_ASSIGN(value, lookup_value(current_frame.current_env, metadata.string_operand, span, module.name, chunk.global_names));
                 current_frame.stack.push_back(value);
                 ++current_frame.ip;
                 break;
@@ -5887,6 +5944,42 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 }
                 auto* array = static_cast<ArrayObject*>(value.as_object());
                 current_frame.stack.push_back(Value::integer(static_cast<std::int64_t>(array->elements.size())));
+                ++current_frame.ip;
+                break;
+            }
+            case BytecodeOp::IterHasNext: {
+                ZEPHYR_TRY_ASSIGN(index, pop_value(span));
+                ZEPHYR_TRY_ASSIGN(iterable, pop_value(span));
+                if (iterable.is_object() && iterable.as_object()->kind == ObjectKind::Array) {
+                    auto* arr = static_cast<ArrayObject*>(iterable.as_object());
+                    const bool has = index.as_int() < static_cast<std::int64_t>(arr->elements.size());
+                    current_frame.stack.push_back(iterable);
+                    current_frame.stack.push_back(index);
+                    current_frame.stack.push_back(Value::boolean(has));
+                } else {
+                    current_frame.stack.push_back(iterable);
+                    current_frame.stack.push_back(index);
+                    ZEPHYR_TRY_ASSIGN(result, call_member_value(iterable, "has_next", {}, span, module.name));
+                    current_frame.stack.push_back(result);
+                }
+                ++current_frame.ip;
+                break;
+            }
+            case BytecodeOp::IterNext: {
+                ZEPHYR_TRY_ASSIGN(index, pop_value(span));
+                ZEPHYR_TRY_ASSIGN(iterable, pop_value(span));
+                if (iterable.is_object() && iterable.as_object()->kind == ObjectKind::Array) {
+                    auto* arr = static_cast<ArrayObject*>(iterable.as_object());
+                    const Value elem = arr->elements[static_cast<std::size_t>(index.as_int())];
+                    current_frame.stack.push_back(iterable);
+                    current_frame.stack.push_back(Value::integer(index.as_int() + 1));
+                    current_frame.stack.push_back(elem);
+                } else {
+                    ZEPHYR_TRY_ASSIGN(elem, call_member_value(iterable, "next", {}, span, module.name));
+                    current_frame.stack.push_back(iterable);
+                    current_frame.stack.push_back(index);
+                    current_frame.stack.push_back(elem);
+                }
                 ++current_frame.ip;
                 break;
             }
@@ -6436,6 +6529,7 @@ RuntimeResult<ModuleRecord*> Runtime::load_file_record(const std::filesystem::pa
         }
         if (record.bytecode == nullptr) {
             ZEPHYR_TRY_ASSIGN(source, read_all_text(resolved));
+            record.source_text = source;
             ZEPHYR_TRY_ASSIGN(program, parse_source(source, key));
             record.program = std::move(program);
         }
@@ -6467,6 +6561,7 @@ RuntimeResult<ModuleRecord*> Runtime::load_virtual_record(const std::string& sou
         ModuleRecord record;
         record.name = module_name;
         record.path = base_dir / module_name;
+        record.source_text = source;
         ZEPHYR_TRY_ASSIGN(program, parse_source(source, module_name));
         record.program = std::move(program);
         record.environment = allocate_pinned<Environment>(root_environment_, EnvironmentKind::Module);
@@ -7145,10 +7240,26 @@ Binding* Runtime::lookup_binding(Environment* environment, const std::string& na
 }
 
 RuntimeResult<Value> Runtime::lookup_value(Environment* environment, const std::string& name, const Span& span,
-                                           const std::string& module_name) {
+                                           const std::string& module_name,
+                                           const std::vector<std::string>& extra_hint_names) {
     Binding* binding = lookup_binding(environment, name);
     if (binding == nullptr) {
-        return make_loc_error<Value>(module_name, span, "Unknown identifier '" + name + "'.");
+        std::vector<std::string> all_names = extra_hint_names;
+        if (environment != nullptr) {
+            environment->collect_names(all_names);
+        }
+        std::string source_text;
+        auto mod_it = modules_.find(module_name);
+        if (mod_it != modules_.end()) {
+            source_text = mod_it->second.source_text;
+        }
+        std::string context = format_source_context(source_text, span, name.size());
+        std::string message = context + "Unknown identifier '" + name + "'.";
+        const auto suggestion = suggest_similar_name(name, all_names);
+        if (suggestion) {
+            message += "\nhint: did you mean '" + *suggestion + "'?";
+        }
+        return make_loc_error<Value>(module_name, span, message);
     }
     return read_binding_value(*binding);
 }

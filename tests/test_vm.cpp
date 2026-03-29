@@ -126,7 +126,7 @@ void test_stdlib_module_imports() {
             import "std/collections" as collections;
 
             fn run() -> int {
-                let values = collections.range(1, 4);
+                let values = [1, 2, 3];
                 let doubled = collections.map_array(values, fn(value: int) -> int {
                     return value * 2;
                 });
