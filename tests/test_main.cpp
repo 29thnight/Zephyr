@@ -104,6 +104,9 @@ int main() {
         test_where_clause_basic();
         test_where_multiple_bounds();
         test_where_bound_violation();
+        test_std_json_parse();
+        test_std_json_array();
+        test_std_collections_hashmap();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

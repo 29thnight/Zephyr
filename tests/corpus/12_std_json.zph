@@ -1,0 +1,23 @@
+import { parse, stringify } from "std/json";
+
+fn test_numbers() {
+    assert(stringify(42) == "42");
+    assert(stringify(3.14) == "3.14");
+    assert(stringify(true) == "true");
+    assert(stringify(false) == "false");
+}
+
+fn test_strings() {
+    assert(stringify("hello") == "\"hello\"");
+}
+
+fn test_arrays() {
+    let arr = parse("[1, 2, 3]");
+    assert(stringify(arr) == "[1,2,3]");
+}
+
+fn main() {
+    test_numbers();
+    test_strings();
+    test_arrays();
+}

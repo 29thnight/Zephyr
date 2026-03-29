@@ -34,3 +34,97 @@ export fn fold_array(arr: Array, init: any, f: Function) -> any {
     }
     return acc;
 }
+
+// ─── HashMap ─────────────────────────────────────────────────────────────────
+
+export fn hashmap_new() -> any {
+    return __zephyr_hashmap_new();
+}
+
+export fn hashmap_set(m: any, key: string, val: any) -> any {
+    return __zephyr_hashmap_set(m, key, val);
+}
+
+export fn hashmap_get(m: any, key: string) -> any {
+    return __zephyr_hashmap_get(m, key);
+}
+
+export fn hashmap_has(m: any, key: string) -> bool {
+    return __zephyr_hashmap_has(m, key);
+}
+
+export fn hashmap_delete(m: any, key: string) -> any {
+    return __zephyr_hashmap_delete(m, key);
+}
+
+export fn hashmap_keys(m: any) -> Array {
+    return __zephyr_hashmap_keys(m);
+}
+
+export fn hashmap_values(m: any) -> Array {
+    return __zephyr_hashmap_values(m);
+}
+
+export fn hashmap_size(m: any) -> int {
+    return __zephyr_hashmap_size(m);
+}
+
+export fn hashmap_clear(m: any) -> any {
+    return __zephyr_hashmap_clear(m);
+}
+
+// ─── Set ─────────────────────────────────────────────────────────────────────
+
+export fn set_new() -> any {
+    return __zephyr_set_new();
+}
+
+export fn set_add(s: any, val: any) -> any {
+    return __zephyr_set_add(s, val);
+}
+
+export fn set_has(s: any, val: any) -> bool {
+    return __zephyr_set_has(s, val);
+}
+
+export fn set_delete(s: any, val: any) -> any {
+    return __zephyr_set_delete(s, val);
+}
+
+export fn set_size(s: any) -> int {
+    return __zephyr_set_size(s);
+}
+
+export fn set_to_array(s: any) -> Array {
+    return __zephyr_set_to_array(s);
+}
+
+// ─── Queue ───────────────────────────────────────────────────────────────────
+
+export fn queue_new() -> any {
+    return __zephyr_queue_new();
+}
+
+export fn queue_push(q: any, val: any) -> any {
+    return __zephyr_queue_push(q, val);
+}
+
+export fn queue_pop(q: any) -> any {
+    return __zephyr_queue_pop(q);
+}
+
+export fn queue_peek(q: any) -> any {
+    return __zephyr_queue_peek(q);
+}
+
+export fn queue_size(q: any) -> int {
+    return __zephyr_queue_size(q);
+}
+
+export fn queue_is_empty(q: any) -> bool {
+    return __zephyr_queue_is_empty(q);
+}
+
+export fn queue_to_array(q: any) -> Array {
+    return __zephyr_queue_to_array(q);
+}

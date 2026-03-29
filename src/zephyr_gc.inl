@@ -8978,6 +8978,192 @@ void Runtime::register_global_function(const std::string& name, ZephyrNativeFunc
                  std::string("Function"));
 }
 
+// ─── std/json helpers ────────────────────────────────────────────────────────
+
+static void json_skip_whitespace(const std::string& src, std::size_t& pos) {
+    while (pos < src.size() &&
+           (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\n' || src[pos] == '\r'))
+        ++pos;
+}
+
+static ZephyrValue json_parse_value(const std::string& src, std::size_t& pos);
+
+static ZephyrValue json_parse_value(const std::string& src, std::size_t& pos) {
+    json_skip_whitespace(src, pos);
+    if (pos >= src.size()) throw std::runtime_error("Unexpected end of JSON");
+    char c = src[pos];
+    if (c == 'n') {
+        if (src.substr(pos, 4) == "null") { pos += 4; return ZephyrValue(); }
+        throw std::runtime_error("Invalid JSON token at pos " + std::to_string(pos));
+    }
+    if (c == 't') {
+        if (src.substr(pos, 4) == "true") { pos += 4; return ZephyrValue(true); }
+        throw std::runtime_error("Invalid JSON token at pos " + std::to_string(pos));
+    }
+    if (c == 'f') {
+        if (src.substr(pos, 5) == "false") { pos += 5; return ZephyrValue(false); }
+        throw std::runtime_error("Invalid JSON token at pos " + std::to_string(pos));
+    }
+    if (c == '"') {
+        ++pos;
+        std::string result;
+        while (pos < src.size() && src[pos] != '"') {
+            if (src[pos] == '\\') {
+                ++pos;
+                if (pos >= src.size()) throw std::runtime_error("Unterminated escape in JSON string");
+                switch (src[pos]) {
+                    case '"':  result += '"';  break;
+                    case '\\': result += '\\'; break;
+                    case '/':  result += '/';  break;
+                    case 'n':  result += '\n'; break;
+                    case 'r':  result += '\r'; break;
+                    case 't':  result += '\t'; break;
+                    default:   result += src[pos]; break;
+                }
+            } else {
+                result += src[pos];
+            }
+            ++pos;
+        }
+        if (pos >= src.size()) throw std::runtime_error("Unterminated string in JSON");
+        ++pos;
+        return ZephyrValue(result);
+    }
+    if (c == '[') {
+        ++pos;
+        ZephyrValue::Array arr;
+        json_skip_whitespace(src, pos);
+        if (pos < src.size() && src[pos] == ']') { ++pos; return ZephyrValue(arr); }
+        while (true) {
+            arr.push_back(json_parse_value(src, pos));
+            json_skip_whitespace(src, pos);
+            if (pos >= src.size()) throw std::runtime_error("Unterminated array in JSON");
+            if (src[pos] == ']') { ++pos; break; }
+            if (src[pos] != ',') throw std::runtime_error("Expected ',' in JSON array");
+            ++pos;
+        }
+        return ZephyrValue(arr);
+    }
+    if (c == '{') {
+        ++pos;
+        ZephyrRecord rec;
+        rec.type_name = "object";
+        json_skip_whitespace(src, pos);
+        if (pos < src.size() && src[pos] == '}') { ++pos; return ZephyrValue(rec); }
+        while (true) {
+            json_skip_whitespace(src, pos);
+            if (pos >= src.size() || src[pos] != '"')
+                throw std::runtime_error("Expected string key in JSON object");
+            ZephyrValue key_val = json_parse_value(src, pos);
+            const std::string key = key_val.as_string();
+            json_skip_whitespace(src, pos);
+            if (pos >= src.size() || src[pos] != ':')
+                throw std::runtime_error("Expected ':' in JSON object");
+            ++pos;
+            ZephyrValue val = json_parse_value(src, pos);
+            rec.fields[key] = std::move(val);
+            json_skip_whitespace(src, pos);
+            if (pos >= src.size()) throw std::runtime_error("Unterminated object in JSON");
+            if (src[pos] == '}') { ++pos; break; }
+            if (src[pos] != ',') throw std::runtime_error("Expected ',' in JSON object");
+            ++pos;
+        }
+        return ZephyrValue(rec);
+    }
+    // number
+    std::size_t start = pos;
+    bool is_float = false;
+    if (c == '-') ++pos;
+    while (pos < src.size() && std::isdigit(static_cast<unsigned char>(src[pos]))) ++pos;
+    if (pos < src.size() && src[pos] == '.') {
+        is_float = true; ++pos;
+        while (pos < src.size() && std::isdigit(static_cast<unsigned char>(src[pos]))) ++pos;
+    }
+    if (pos < src.size() && (src[pos] == 'e' || src[pos] == 'E')) {
+        is_float = true; ++pos;
+        if (pos < src.size() && (src[pos] == '+' || src[pos] == '-')) ++pos;
+        while (pos < src.size() && std::isdigit(static_cast<unsigned char>(src[pos]))) ++pos;
+    }
+    std::string num_str = src.substr(start, pos - start);
+    if (num_str.empty()) throw std::runtime_error("Invalid JSON at pos " + std::to_string(pos));
+    if (is_float) return ZephyrValue(std::stod(num_str));
+    return ZephyrValue(static_cast<std::int64_t>(std::stoll(num_str)));
+}
+
+static std::string json_stringify_value(const ZephyrValue& val) {
+    if (val.is_nil())   return "null";
+    if (val.is_bool())  return val.as_bool() ? "true" : "false";
+    if (val.is_int())   return std::to_string(val.as_int());
+    if (val.is_float()) {
+        std::ostringstream oss;
+        oss << val.as_float();
+        return oss.str();
+    }
+    if (val.is_string()) {
+        std::string s = "\"";
+        for (char ch : val.as_string()) {
+            if      (ch == '"')  s += "\\\"";
+            else if (ch == '\\') s += "\\\\";
+            else if (ch == '\n') s += "\\n";
+            else if (ch == '\r') s += "\\r";
+            else if (ch == '\t') s += "\\t";
+            else                 s += ch;
+        }
+        return s + "\"";
+    }
+    if (val.is_array()) {
+        std::string s = "[";
+        const auto& arr = val.as_array();
+        for (std::size_t i = 0; i < arr.size(); ++i) {
+            if (i > 0) s += ",";
+            s += json_stringify_value(arr[i]);
+        }
+        return s + "]";
+    }
+    if (val.is_record()) {
+        const auto& rec = val.as_record();
+        std::string s = "{";
+        bool first = true;
+        for (const auto& kv : rec.fields) {
+            if (!first) s += ",";
+            first = false;
+            s += "\"" + kv.first + "\":" + json_stringify_value(kv.second);
+        }
+        return s + "}";
+    }
+    return "null";
+}
+
+// ─── std/collections value-equality helper ───────────────────────────────────
+
+static bool zephyr_value_eq(const ZephyrValue& a, const ZephyrValue& b) {
+    if (a.kind() != b.kind()) return false;
+    switch (a.kind()) {
+        case ZephyrValue::Kind::Nil:    return true;
+        case ZephyrValue::Kind::Bool:   return a.as_bool()   == b.as_bool();
+        case ZephyrValue::Kind::Int:    return a.as_int()    == b.as_int();
+        case ZephyrValue::Kind::Float:  return a.as_float()  == b.as_float();
+        case ZephyrValue::Kind::String: return a.as_string() == b.as_string();
+        default:                        return false;
+    }
+}
+
+// ─── std/collections host-handle factory ─────────────────────────────────────
+
+static ZephyrValue make_collection_handle(std::shared_ptr<ZephyrHostClass> cls,
+                                          std::shared_ptr<void>            instance) {
+    ZephyrHostObjectRef ref;
+    ref.host_class             = std::move(cls);
+    ref.instance               = std::move(instance);
+    ref.strong_residency       = true;
+    ref.has_explicit_policy    = true;
+    ref.policy.allow_field_store       = true;
+    ref.policy.allow_closure_capture   = true;
+    ref.policy.allow_coroutine_capture = true;
+    ref.policy.strong_residency_allowed = true;
+    return ZephyrValue(ref);
+}
+
 void Runtime::install_core() {
     register_global_function(
         "print",
@@ -9420,6 +9606,241 @@ void Runtime::install_core() {
             return ZephyrValue(std::move(result));
         }, {"string", "int"}, "string");
     });
+
+    // std/json built-in module
+    register_module("std/json", [](ZephyrModuleBinder& m) {
+        m.add_function("parse", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 1 || !args[0].is_string())
+                fail("json.parse expects a string argument.");
+            std::size_t pos = 0;
+            return json_parse_value(args[0].as_string(), pos);
+        }, {"string"}, "any");
+
+        m.add_function("stringify", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 1) fail("json.stringify expects 1 argument.");
+            return ZephyrValue(json_stringify_value(args[0]));
+        }, {"any"}, "string");
+
+        m.add_function("parse_safe", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 1 || !args[0].is_string())
+                fail("json.parse_safe expects a string argument.");
+            ZephyrEnumValue result;
+            result.type_name = "Result";
+            try {
+                std::size_t pos = 0;
+                ZephyrValue parsed = json_parse_value(args[0].as_string(), pos);
+                result.variant_name = "Ok";
+                result.payload.emplace_back(std::move(parsed));
+            } catch (const std::exception& e) {
+                result.variant_name = "Err";
+                result.payload.emplace_back(std::string(e.what()));
+            }
+            return ZephyrValue(result);
+        }, {"string"}, "any");
+    });
+
+    // std/collections — HashMap, Set, Queue host-backed global functions
+    {
+        static auto s_hashmap_class = std::make_shared<ZephyrHostClass>("HashMap");
+        static auto s_set_class     = std::make_shared<ZephyrHostClass>("Set");
+        static auto s_queue_class   = std::make_shared<ZephyrHostClass>("Queue");
+
+        using HashMap = std::unordered_map<std::string, ZephyrValue>;
+        using SetVec  = std::vector<ZephyrValue>;
+        using Queue   = std::deque<ZephyrValue>;
+
+        register_global_function("__zephyr_hashmap_new",
+            [](const std::vector<ZephyrValue>&) -> ZephyrValue {
+                return make_collection_handle(s_hashmap_class,
+                    std::static_pointer_cast<void>(std::make_shared<HashMap>()));
+            }, {}, "any");
+
+        register_global_function("__zephyr_hashmap_set",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 3 || !args[0].is_host_object() || !args[1].is_string())
+                    fail("HashMap.set expects (HashMap, string, any).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                (*m)[args[1].as_string()] = args[2];
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_hashmap_get",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object() || !args[1].is_string())
+                    fail("HashMap.get expects (HashMap, string).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                const auto it = m->find(args[1].as_string());
+                return it == m->end() ? ZephyrValue() : it->second;
+            }, {}, "any");
+
+        register_global_function("__zephyr_hashmap_has",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object() || !args[1].is_string())
+                    fail("HashMap.has expects (HashMap, string).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(m->count(args[1].as_string()) > 0);
+            }, {}, "bool");
+
+        register_global_function("__zephyr_hashmap_delete",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object() || !args[1].is_string())
+                    fail("HashMap.delete expects (HashMap, string).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                m->erase(args[1].as_string());
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_hashmap_keys",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("HashMap.keys expects (HashMap).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                ZephyrValue::Array keys;
+                keys.reserve(m->size());
+                for (const auto& kv : *m) keys.emplace_back(kv.first);
+                return ZephyrValue(std::move(keys));
+            }, {}, "Array");
+
+        register_global_function("__zephyr_hashmap_values",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("HashMap.values expects (HashMap).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                ZephyrValue::Array vals;
+                vals.reserve(m->size());
+                for (const auto& kv : *m) vals.push_back(kv.second);
+                return ZephyrValue(std::move(vals));
+            }, {}, "Array");
+
+        register_global_function("__zephyr_hashmap_size",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("HashMap.size expects (HashMap).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(static_cast<std::int64_t>(m->size()));
+            }, {}, "int");
+
+        register_global_function("__zephyr_hashmap_clear",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("HashMap.clear expects (HashMap).");
+                auto* m = static_cast<HashMap*>(args[0].as_host_object().instance.get());
+                m->clear();
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_set_new",
+            [](const std::vector<ZephyrValue>&) -> ZephyrValue {
+                return make_collection_handle(s_set_class,
+                    std::static_pointer_cast<void>(std::make_shared<SetVec>()));
+            }, {}, "any");
+
+        register_global_function("__zephyr_set_add",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object())
+                    fail("Set.add expects (Set, any).");
+                auto* s = static_cast<SetVec*>(args[0].as_host_object().instance.get());
+                for (const auto& v : *s)
+                    if (zephyr_value_eq(v, args[1])) return ZephyrValue();
+                s->push_back(args[1]);
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_set_has",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object())
+                    fail("Set.has expects (Set, any).");
+                auto* s = static_cast<SetVec*>(args[0].as_host_object().instance.get());
+                for (const auto& v : *s)
+                    if (zephyr_value_eq(v, args[1])) return ZephyrValue(true);
+                return ZephyrValue(false);
+            }, {}, "bool");
+
+        register_global_function("__zephyr_set_delete",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object())
+                    fail("Set.delete expects (Set, any).");
+                auto* s = static_cast<SetVec*>(args[0].as_host_object().instance.get());
+                s->erase(std::remove_if(s->begin(), s->end(),
+                    [&](const ZephyrValue& v) { return zephyr_value_eq(v, args[1]); }),
+                    s->end());
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_set_size",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Set.size expects (Set).");
+                auto* s = static_cast<SetVec*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(static_cast<std::int64_t>(s->size()));
+            }, {}, "int");
+
+        register_global_function("__zephyr_set_to_array",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Set.to_array expects (Set).");
+                auto* s = static_cast<SetVec*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(ZephyrValue::Array(s->begin(), s->end()));
+            }, {}, "Array");
+
+        register_global_function("__zephyr_queue_new",
+            [](const std::vector<ZephyrValue>&) -> ZephyrValue {
+                return make_collection_handle(s_queue_class,
+                    std::static_pointer_cast<void>(std::make_shared<Queue>()));
+            }, {}, "any");
+
+        register_global_function("__zephyr_queue_push",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 2 || !args[0].is_host_object())
+                    fail("Queue.push expects (Queue, any).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                q->push_back(args[1]);
+                return ZephyrValue();
+            }, {}, "any");
+
+        register_global_function("__zephyr_queue_pop",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Queue.pop expects (Queue).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                if (q->empty()) return ZephyrValue();
+                ZephyrValue front = q->front();
+                q->pop_front();
+                return front;
+            }, {}, "any");
+
+        register_global_function("__zephyr_queue_peek",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Queue.peek expects (Queue).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                return q->empty() ? ZephyrValue() : q->front();
+            }, {}, "any");
+
+        register_global_function("__zephyr_queue_size",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Queue.size expects (Queue).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(static_cast<std::int64_t>(q->size()));
+            }, {}, "int");
+
+        register_global_function("__zephyr_queue_is_empty",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Queue.is_empty expects (Queue).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(q->empty());
+            }, {}, "bool");
+
+        register_global_function("__zephyr_queue_to_array",
+            [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+                if (args.size() != 1 || !args[0].is_host_object())
+                    fail("Queue.to_array expects (Queue).");
+                auto* q = static_cast<Queue*>(args[0].as_host_object().instance.get());
+                return ZephyrValue(ZephyrValue::Array(q->begin(), q->end()));
+            }, {}, "Array");
+    }
 }
 
 void Runtime::mark_roots() {

@@ -1641,4 +1641,89 @@ void test_where_bound_violation() {
     require(rejected, "where bound violation: should throw when calling launch with Rock");
 }
 
+void test_std_json_parse() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { stringify } from "std/json";
+            export fn check_stringify_int()   -> bool { return stringify(42)    == "42"; }
+            export fn check_stringify_true()  -> bool { return stringify(true)  == "true"; }
+            export fn check_stringify_false() -> bool { return stringify(false) == "false"; }
+            export fn check_stringify_null()  -> bool { return stringify(nil)   == "null"; }
+            export fn check_stringify_str()   -> bool { return stringify("hi")  == "\"hi\""; }
+        )",
+        "unit_std_json_parse",
+        std::filesystem::current_path());
+
+    const auto tests = std::vector<std::string>{
+        "check_stringify_int", "check_stringify_true", "check_stringify_false",
+        "check_stringify_null", "check_stringify_str"};
+    for (const auto& fn_name : tests) {
+        const auto h = vm.get_function("unit_std_json_parse", fn_name);
+        require(h.has_value(), "std_json: missing handle for " + fn_name);
+        const auto result = vm.call(*h);
+        require(result.is_bool() && result.as_bool(), "std_json: " + fn_name + " returned false");
+    }
+}
+
+void test_std_json_array() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { parse, stringify } from "std/json";
+            export fn check_array() -> bool {
+                let arr = parse("[1, 2, 3]");
+                return stringify(arr) == "[1,2,3]";
+            }
+        )",
+        "unit_std_json_array",
+        std::filesystem::current_path());
+
+    const auto h = vm.get_function("unit_std_json_array", "check_array");
+    require(h.has_value(), "std_json_array: missing check_array handle");
+    const auto result = vm.call(*h);
+    require(result.is_bool() && result.as_bool(), "std_json_array: stringify([1,2,3]) should return \"[1,2,3]\"");
+}
+
+void test_std_collections_hashmap() {
+    zephyr::ZephyrVM vm;
+    vm.add_module_search_path(std::filesystem::current_path().string());
+    vm.execute_string(
+        R"(
+            import { hashmap_new, hashmap_set, hashmap_get, hashmap_has, hashmap_size, hashmap_delete } from "std/collections";
+            export fn check_size() -> bool {
+                let m = hashmap_new();
+                hashmap_set(m, "x", 10);
+                hashmap_set(m, "y", 20);
+                return hashmap_size(m) == 2;
+            }
+            export fn check_get() -> bool {
+                let m = hashmap_new();
+                hashmap_set(m, "k", 99);
+                return hashmap_get(m, "k") == 99;
+            }
+            export fn check_has() -> bool {
+                let m = hashmap_new();
+                hashmap_set(m, "a", 1);
+                return hashmap_has(m, "a") == true && hashmap_has(m, "b") == false;
+            }
+            export fn check_delete() -> bool {
+                let m = hashmap_new();
+                hashmap_set(m, "d", 7);
+                hashmap_delete(m, "d");
+                return hashmap_size(m) == 0;
+            }
+        )",
+        "unit_std_collections_hashmap",
+        std::filesystem::current_path());
+
+    const auto tests = std::vector<std::string>{"check_size", "check_get", "check_has", "check_delete"};
+    for (const auto& fn_name : tests) {
+        const auto h = vm.get_function("unit_std_collections_hashmap", fn_name);
+        require(h.has_value(), "std_collections_hashmap: missing handle for " + fn_name);
+        const auto result = vm.call(*h);
+        require(result.is_bool() && result.as_bool(), "std_collections_hashmap: " + fn_name + " returned false");
+    }
+}
+
 }  // namespace zephyr_tests

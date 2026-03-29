@@ -225,5 +225,8 @@ void test_trait_impl_missing_method();
 void test_where_clause_basic();
 void test_where_multiple_bounds();
 void test_where_bound_violation();
+void test_std_json_parse();
+void test_std_json_array();
+void test_std_collections_hashmap();
 
 }  // namespace zephyr_tests
