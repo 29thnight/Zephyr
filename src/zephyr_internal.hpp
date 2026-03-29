@@ -325,6 +325,7 @@ enum class TokenType {
     KeywordString,
     KeywordVoid,
     KeywordAny,
+    KeywordWhere,
 };
 
 inline std::optional<TokenType> compound_assignment_binary_op(TokenType assignment_op) {

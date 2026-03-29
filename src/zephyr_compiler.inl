@@ -632,7 +632,8 @@ inline std::string describe_bytecode_constant_literal(const BytecodeConstant& co
 struct ScriptFunctionObject final : GcObject {
     ScriptFunctionObject(std::string name, std::string module_name, std::vector<Param> params, std::optional<TypeRef> return_type, BlockStmt* body,
                          Environment* closure, Span definition_span, std::shared_ptr<BytecodeFunction> bytecode = {},
-                         std::vector<std::string> generic_params = {})
+                         std::vector<std::string> generic_params = {},
+                         std::vector<TraitBound> where_clauses = {})
         : GcObject(ObjectKind::ScriptFunction),
           name(std::move(name)),
           module_name(std::move(module_name)),
@@ -642,7 +643,8 @@ struct ScriptFunctionObject final : GcObject {
           closure(closure),
           definition_span(definition_span),
           bytecode(std::move(bytecode)),
-          generic_params(std::move(generic_params)) {}
+          generic_params(std::move(generic_params)),
+          where_clauses(std::move(where_clauses)) {}
 
     void trace(class Runtime& runtime) override;
 
@@ -656,6 +658,7 @@ struct ScriptFunctionObject final : GcObject {
     std::shared_ptr<BytecodeFunction> bytecode;
     std::vector<UpvalueCellObject*> captured_upvalues;
     std::vector<std::string> generic_params;  // Generic type parameters: <T, U, ...>
+    std::vector<TraitBound> where_clauses;
 };
 
 struct NativeFunctionObject final : GcObject {
@@ -3208,7 +3211,8 @@ private:
                                                                 Environment* closure,
                                                                 std::shared_ptr<BytecodeFunction> bytecode,
                                                                 const Span& span,
-                                                                const std::vector<std::string>& generic_params = {});
+                                                                const std::vector<std::string>& generic_params = {},
+                                                                const std::vector<TraitBound>& where_clauses = {});
     VoidResult ensure_capture_cells(Environment* environment, HandleContainerKind container, const Span& span, const std::string& module_name);
     VoidResult validate_closure_capture(Environment* environment, const Span& span, const std::string& module_name);
     Environment* module_or_root_environment(Environment* environment) const;

@@ -140,6 +140,7 @@ private:
     RuntimeResult<std::unique_ptr<Stmt>> parse_yield_stmt();
     VoidResult parse_function_signature(std::vector<Param>& params, std::optional<TypeRef>& return_type);
     VoidResult parse_generic_type_params(std::vector<std::string>& out_params);
+    VoidResult parse_where_clause(std::vector<TraitBound>& out_bounds);
     RuntimeResult<TypeRef> parse_type_ref();
     RuntimeResult<std::vector<TypeRef>> parse_type_arguments();
     RuntimeResult<ExprPtr> parse_expression();
@@ -272,6 +273,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_function_decl() {
     function->name = name.lexeme;
     ZEPHYR_TRY(parse_generic_type_params(function->generic_params));
     ZEPHYR_TRY(parse_function_signature(function->params, function->return_type));
+    ZEPHYR_TRY(parse_where_clause(function->where_clauses));
     ZEPHYR_TRY_ASSIGN(body, parse_block_stmt("Expected function body."));
     function->body = std::move(body);
     return function;
@@ -343,6 +345,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_trait_decl() {
         method.span = method_name.span;
         method.name = method_name.lexeme;
         ZEPHYR_TRY(parse_function_signature(method.params, method.return_type));
+        ZEPHYR_TRY(parse_where_clause(method.where_clauses));
         ZEPHYR_TRY(consume(TokenType::Semicolon, "Expected ';' after trait method signature."));
         decl->methods.push_back(std::move(method));
     }
@@ -1235,5 +1238,25 @@ RuntimeResult<PatternPtr> Parser::parse_pattern_primary() {
     }
 
     return make_loc_error<PatternPtr>(module_name_, peek().span, "Expected match pattern.");
+}
+
+VoidResult Parser::parse_where_clause(std::vector<TraitBound>& out_bounds) {
+    if (!match({TokenType::KeywordWhere})) {
+        return ok_result();
+    }
+    do {
+        TraitBound bound;
+        ZEPHYR_TRY_ASSIGN(type_param_token, consume(TokenType::Identifier, "Expected type parameter name in where clause."));
+        bound.type_param = type_param_token.lexeme;
+        ZEPHYR_TRY(consume(TokenType::Colon, "Expected ':' after type parameter in where clause."));
+        ZEPHYR_TRY_ASSIGN(first_trait, parse_type_ref());
+        bound.traits.push_back(first_trait.display_name());
+        while (match({TokenType::Plus})) {
+            ZEPHYR_TRY_ASSIGN(next_trait, parse_type_ref());
+            bound.traits.push_back(next_trait.display_name());
+        }
+        out_bounds.push_back(std::move(bound));
+    } while (match({TokenType::Comma}));
+    return ok_result();
 }
 

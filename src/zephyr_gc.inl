@@ -4075,6 +4075,7 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
                 const std::string function_name =
                     function_decl != nullptr ? function_decl->name : metadata.string_operand;
                 const auto generic_params = function_decl != nullptr ? function_decl->generic_params : std::vector<std::string>{};
+                const auto where_clauses = function_decl != nullptr ? function_decl->where_clauses : std::vector<TraitBound>{};
                 if (metadata.bytecode == nullptr && function_decl == nullptr) {
                     return make_loc_error<Value>(module.name, span, "Cached function metadata is incomplete.");
                 }
@@ -4090,7 +4091,8 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
                                                               : compile_bytecode_function(function_name, cached_params,
                                                                                           function_decl->body.get(), generic_params),
                                                           span,
-                                                          generic_params));
+                                                          generic_params,
+                                                          where_clauses));
                 Value function_value = Value::object(function);
                 define_value(current_env, function_name, function_value, false, std::string("Function"));
                 ++ip;
@@ -6090,6 +6092,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 const std::string function_name =
                     function_decl != nullptr ? function_decl->name : metadata.string_operand;
                 const auto generic_params = function_decl != nullptr ? function_decl->generic_params : std::vector<std::string>{};
+                const auto where_clauses = function_decl != nullptr ? function_decl->where_clauses : std::vector<TraitBound>{};
                 if (metadata.bytecode == nullptr && function_decl == nullptr) {
                     return make_loc_error<CoroutineExecutionResult>(module.name, span, "Cached function metadata is incomplete.");
                 }
@@ -6105,7 +6108,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                                                               : compile_bytecode_function(function_name, cached_params,
                                                                                           function_decl->body.get()),
                                                           span,
-                                                          generic_params));
+                                                          generic_params,
+                                                          where_clauses));
                 Value function_value = Value::object(function);
                 define_value(current_frame.current_env, function_name, function_value, false, std::string("Function"));
                 ++current_frame.ip;
@@ -7783,6 +7787,22 @@ RuntimeResult<Value> Runtime::call_value(const Value& callee, const std::vector<
                                              "function '" + function->name + "' expects " +
                                                  std::to_string(function->params.size()) + " arguments, got " +
                                                  std::to_string(args.size()) + " (defined at " + definition_location + ")");
+            }
+
+            for (const auto& bound : function->where_clauses) {
+                for (std::size_t i = 0; i < function->params.size(); ++i) {
+                    const auto& param = function->params[i];
+                    if (param.type.has_value() && param.type->display_name() == bound.type_param) {
+                        const std::string concrete_type = describe_value_type(args[i]);
+                        for (const auto& trait_name : bound.traits) {
+                            const auto impls_it = trait_impls_.find(concrete_type);
+                            if (impls_it == trait_impls_.end() || impls_it->second.find(trait_name) == impls_it->second.end()) {
+                                return make_loc_error<Value>(module_name, call_span,
+                                    "type '" + concrete_type + "' does not implement trait '" + trait_name + "'");
+                            }
+                        }
+                    }
+                }
             }
 
             if (function->bytecode != nullptr &&
@@ -9851,11 +9871,12 @@ RuntimeResult<ScriptFunctionObject*> Runtime::create_script_function(const std::
                                                                      Environment* closure,
                                                                      std::shared_ptr<BytecodeFunction> bytecode,
                                                                      const Span& span,
-                                                                     const std::vector<std::string>& generic_params) {
+                                                                     const std::vector<std::string>& generic_params,
+                                                                     const std::vector<TraitBound>& where_clauses) {
     ZEPHYR_TRY(validate_closure_capture(closure, span, module_name.empty() ? name : module_name));
     ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(bytecode.get(), span, module_name.empty() ? name : module_name, "Script function"));
     auto* function =
-        allocate<ScriptFunctionObject>(name, module_name, params, return_type, body, select_closure_environment(closure, bytecode), span, bytecode, generic_params);
+        allocate<ScriptFunctionObject>(name, module_name, params, return_type, body, select_closure_environment(closure, bytecode), span, bytecode, generic_params, where_clauses);
     if (bytecode != nullptr) {
         ZEPHYR_TRY_ASSIGN(captured_cells,
                           capture_upvalue_cells(closure, bytecode->upvalue_names, HandleContainerKind::ClosureCapture, span,
@@ -10585,6 +10606,7 @@ ZephyrVM::RuntimeStats Runtime::runtime_stats() const {
     stats.vm.lightweight_calls = lightweight_calls_;
     stats.vm.string_intern_hits = string_intern_hits_;
     stats.vm.string_intern_misses = string_intern_misses_;
+    stats.vm.interned_string_count = interned_strings_.size();
     stats.vm.local_binding_cache_hits = local_binding_cache_hits_;
     stats.vm.local_binding_cache_misses = local_binding_cache_misses_;
     stats.vm.global_binding_cache_hits = global_binding_cache_hits_;

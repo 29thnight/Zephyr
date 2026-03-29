@@ -222,5 +222,8 @@ void test_std_string();
 void test_forward_reference();
 void test_mutual_recursion();
 void test_trait_impl_missing_method();
+void test_where_clause_basic();
+void test_where_multiple_bounds();
+void test_where_bound_violation();
 
 }  // namespace zephyr_tests

@@ -1,0 +1,28 @@
+trait Printable {
+    fn print_info(self) -> string;
+}
+
+struct Point { x: int, y: int }
+struct Circle { radius: int }
+
+impl Printable for Point {
+    fn print_info(self) -> string {
+        return "Point";
+    }
+}
+
+impl Printable for Circle {
+    fn print_info(self) -> string {
+        return "Circle";
+    }
+}
+
+fn print_it<T>(item: T) -> string where T: Printable {
+    return item.print_info();
+}
+
+export fn test_where() -> string {
+    let p = Point { x: 1, y: 2 };
+    let c = Circle { radius: 5 };
+    return print_it(p) + "," + print_it(c);
+}

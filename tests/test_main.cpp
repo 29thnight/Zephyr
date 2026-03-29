@@ -101,6 +101,9 @@ int main() {
         test_forward_reference();
         test_mutual_recursion();
         test_trait_impl_missing_method();
+        test_where_clause_basic();
+        test_where_multiple_bounds();
+        test_where_bound_violation();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

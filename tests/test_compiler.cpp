@@ -1552,4 +1552,93 @@ void test_trait_impl_missing_method() {
     require(rejected, "execute_string should reject impls with missing trait methods");
 }
 
+void test_where_clause_basic() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            trait Describable {
+                fn describe(self) -> string;
+            }
+            struct Dog { name: string }
+            impl Describable for Dog {
+                fn describe(self) -> string { return "Dog: " + self.name; }
+            }
+            fn describe_it<T>(x: T) -> string where T: Describable {
+                return x.describe();
+            }
+            export fn run() -> string {
+                let d = Dog { name: "Rex" };
+                return describe_it(d);
+            }
+        )",
+        "unit_where_basic",
+        std::filesystem::current_path());
+    const auto handle = vm.get_function("unit_where_basic", "run");
+    require(handle.has_value(), "where clause basic: run must exist");
+    const auto result = vm.call(*handle);
+    require(result.is_string() && result.as_string() == "Dog: Rex",
+            "where clause basic: describe_it(d) should return 'Dog: Rex'");
+}
+
+void test_where_multiple_bounds() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            trait Printable {
+                fn to_str(self) -> string;
+            }
+            trait Countable {
+                fn count(self) -> int;
+            }
+            struct Bag { size: int }
+            impl Printable for Bag {
+                fn to_str(self) -> string { return "Bag"; }
+            }
+            impl Countable for Bag {
+                fn count(self) -> int { return self.size; }
+            }
+            fn describe<T>(x: T) -> string where T: Printable, T: Countable {
+                return x.to_str();
+            }
+            export fn run() -> string {
+                let b = Bag { size: 3 };
+                return describe(b);
+            }
+        )",
+        "unit_where_multi",
+        std::filesystem::current_path());
+    const auto handle = vm.get_function("unit_where_multi", "run");
+    require(handle.has_value(), "where multiple bounds: run must exist");
+    const auto result = vm.call(*handle);
+    require(result.is_string() && result.as_string() == "Bag",
+            "where multiple bounds: describe(b) should return 'Bag'");
+}
+
+void test_where_bound_violation() {
+    zephyr::ZephyrVM vm;
+    bool rejected = false;
+    try {
+        vm.execute_string(
+            R"(
+                trait Flyable {
+                    fn fly(self);
+                }
+                fn launch<T>(x: T) where T: Flyable {
+                    x.fly();
+                }
+                struct Rock {}
+                let r = Rock {};
+                launch(r);
+            )",
+            "unit_where_violation",
+            std::filesystem::current_path());
+    } catch (const std::exception& error) {
+        rejected = true;
+        const std::string message = error.what();
+        require(message.find("Rock") != std::string::npos || message.find("Flyable") != std::string::npos,
+                "where bound violation: error should mention 'Rock' or 'Flyable'");
+    }
+    require(rejected, "where bound violation: should throw when calling launch with Rock");
+}
+
 }  // namespace zephyr_tests

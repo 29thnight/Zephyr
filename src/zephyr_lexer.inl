@@ -407,6 +407,7 @@ private:
             {"true", TokenType::KeywordTrue},{"false", TokenType::KeywordFalse},         {"nil", TokenType::KeywordNil},
             {"int",    TokenType::KeywordInt},   {"float",  TokenType::KeywordFloat},        {"bool",   TokenType::KeywordBool},
             {"string", TokenType::KeywordString},{"void",   TokenType::KeywordVoid},         {"any",    TokenType::KeywordAny},
+            {"where",  TokenType::KeywordWhere},
         };
 
         const auto it = keywords.find(value);
@@ -697,12 +698,18 @@ struct YieldStmt final : Stmt {
     ExprPtr value;
 };
 
+struct TraitBound {
+    std::string type_param;
+    std::vector<std::string> traits;
+};
+
 struct FunctionDecl final : Stmt {
     std::string name;
     std::vector<std::string> generic_params;  // e.g., {"T", "U"} for fn foo<T, U>
     std::vector<Param> params;
     std::optional<TypeRef> return_type;
     std::unique_ptr<BlockStmt> body;
+    std::vector<TraitBound> where_clauses;
 };
 
 struct TraitMethodDecl {
@@ -711,6 +718,7 @@ struct TraitMethodDecl {
     std::vector<std::string> generic_params;  // e.g., {"T"} for fn method<T>
     std::vector<Param> params;
     std::optional<TypeRef> return_type;
+    std::vector<TraitBound> where_clauses;
 };
 
 struct StructFieldDecl {
@@ -722,6 +730,7 @@ struct StructDecl final : Stmt {
     std::string name;
     std::vector<std::string> generic_params;  // e.g., {"T"} for struct Pair<T>
     std::vector<StructFieldDecl> fields;
+    std::vector<TraitBound> where_clauses;
 };
 
 struct EnumVariantDecl {
@@ -738,6 +747,7 @@ struct TraitDecl final : Stmt {
     std::string name;
     std::vector<std::string> generic_params;  // e.g., {"T"} for trait Container<T>
     std::vector<TraitMethodDecl> methods;
+    std::vector<TraitBound> where_clauses;
 };
 
 struct ImplDecl final : Stmt {

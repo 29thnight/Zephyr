@@ -397,6 +397,7 @@ struct ZephyrVmStats {
     std::size_t lightweight_calls = 0;       // calls via lightweight (no-env) path (Phase 1.1)
     std::size_t string_intern_hits = 0;
     std::size_t string_intern_misses = 0;
+    std::size_t interned_string_count = 0;
     std::size_t local_binding_cache_hits = 0;
     std::size_t local_binding_cache_misses = 0;
     std::size_t global_binding_cache_hits = 0;
