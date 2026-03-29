@@ -235,5 +235,8 @@ void test_collections_queue_method();
 void test_custom_iterator();
 void test_range_iterator();
 void test_better_error_message();
+void test_std_io_module();
+void test_std_gc_module();
+void test_std_profiler_module();
 
 }  // namespace zephyr_tests

@@ -113,6 +113,9 @@ int main() {
         test_custom_iterator();
         test_range_iterator();
         test_better_error_message();
+        test_std_io_module();
+        test_std_gc_module();
+        test_std_profiler_module();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

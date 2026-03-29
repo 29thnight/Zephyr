@@ -1869,4 +1869,63 @@ void test_better_error_message() {
             "test_better_error_message: error should contain 'greet' hint, got: " + error_msg);
 }
 
+void test_std_io_module() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { print, println } from "std/io";
+            export fn check_io() -> int {
+                println("hello from io");
+                return 42;
+            }
+        )",
+        "unit_std_io",
+        std::filesystem::current_path());
+    const auto h = vm.get_function("unit_std_io", "check_io");
+    require(h.has_value(), "std_io: missing handle for check_io");
+    const auto result = vm.call(*h);
+    require(result.is_int() && result.as_int() == 42, "std_io: check_io should return 42");
+}
+
+void test_std_gc_module() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { collect, pause_p50_us, pause_p99_us, frame_miss_count } from "std/gc";
+            export fn check_gc() -> bool {
+                collect();
+                let p50 = pause_p50_us();
+                let miss = frame_miss_count();
+                return miss >= 0;
+            }
+        )",
+        "unit_std_gc",
+        std::filesystem::current_path());
+    const auto h = vm.get_function("unit_std_gc", "check_gc");
+    require(h.has_value(), "std_gc: missing handle for check_gc");
+    const auto result = vm.call(*h);
+    require(result.is_bool() && result.as_bool(), "std_gc: check_gc should return true");
+}
+
+void test_std_profiler_module() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            import { start, stop } from "std/profiler";
+            fn add(a: int, b: int) -> int { return a + b; }
+            export fn check_profiler() -> bool {
+                start();
+                let x = add(1, 2);
+                let entries = stop();
+                return __zephyr_std_len(entries) >= 0;
+            }
+        )",
+        "unit_std_profiler",
+        std::filesystem::current_path());
+    const auto h = vm.get_function("unit_std_profiler", "check_profiler");
+    require(h.has_value(), "std_profiler: missing handle for check_profiler");
+    const auto result = vm.call(*h);
+    require(result.is_bool() && result.as_bool(), "std_profiler: check_profiler should return true");
+}
+
 }  // namespace zephyr_tests
