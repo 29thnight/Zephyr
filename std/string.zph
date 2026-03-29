@@ -1,14 +1,14 @@
-export fn starts_with(s: String, prefix: String) -> Bool {
+export fn starts_with(s: string, prefix: string) -> bool {
     return __zephyr_std_starts_with(s, prefix);
 }
 
-export fn ends_with(s: String, suffix: String) -> Bool {
+export fn ends_with(s: string, suffix: string) -> bool {
     return __zephyr_std_ends_with(s, suffix);
 }
 
-export fn repeat(s: String, n: Int) -> String {
+export fn repeat(s: string, n: int) -> string {
     let mut result = "";
-    let mut i: Int = 0;
+    let mut i: int = 0;
     while i < n {
         result = result + s;
         i = i + 1;

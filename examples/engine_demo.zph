@@ -1,6 +1,6 @@
 import "engine" as engine;
 
-fn main() -> Int {
+fn main() -> int {
     let c = player();
     engine.log("player", c.name, c.hp);
     c.damage(15);

@@ -405,6 +405,8 @@ private:
             {"import", TokenType::KeywordImport},       {"export", TokenType::KeywordExport},       {"as", TokenType::KeywordAs},
             {"from", TokenType::KeywordFrom},
             {"true", TokenType::KeywordTrue},{"false", TokenType::KeywordFalse},         {"nil", TokenType::KeywordNil},
+            {"int",    TokenType::KeywordInt},   {"float",  TokenType::KeywordFloat},        {"bool",   TokenType::KeywordBool},
+            {"string", TokenType::KeywordString},{"void",   TokenType::KeywordVoid},         {"any",    TokenType::KeywordAny},
         };
 
         const auto it = keywords.find(value);

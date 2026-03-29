@@ -1,4 +1,4 @@
-﻿#include "test_common.hpp"
+#include "test_common.hpp"
 
 namespace zephyr_tests {
 
@@ -12,11 +12,11 @@ void test_check_rejects_circular_import() {
     const auto b_path = temp_dir / "b.zph";
     {
         std::ofstream out(a_path);
-        out << "import \"b.zph\";\nfn main() -> Int { return 1; }\n";
+        out << "import \"b.zph\";\nfn main() -> int { return 1; }\n";
     }
     {
         std::ofstream out(b_path);
-        out << "import \"a.zph\";\nfn helper() -> Int { return 2; }\n";
+        out << "import \"a.zph\";\nfn helper() -> int { return 2; }\n";
     }
 
     bool rejected = false;
@@ -39,14 +39,14 @@ void test_check_reports_trait_impl_missing_method() {
         vm.check_string(
             R"(
                 trait Drawable {
-                    fn draw(self) -> Int;
-                    fn metric(self) -> Int;
+                    fn draw(self) -> int;
+                    fn metric(self) -> int;
                 }
 
-                struct Player { x: Int }
+                struct Player { x: int }
 
                 impl Drawable for Player {
-                    fn draw(self) -> Int {
+                    fn draw(self) -> int {
                         return self.x;
                     }
                 }
@@ -68,17 +68,17 @@ void test_check_accepts_complete_trait_impl_and_warns_on_extra_method() {
     vm.check_string(
         R"(
             trait Greeter {
-                fn greet(self) -> String;
+                fn greet(self) -> string;
             }
 
-            struct Cat { name: String }
+            struct Cat { name: string }
 
             impl Greeter for Cat {
-                fn greet(self) -> String {
+                fn greet(self) -> string {
                     return self.name;
                 }
 
-                fn extra(self) -> String {
+                fn extra(self) -> string {
                     return self.name;
                 }
             }
@@ -93,13 +93,13 @@ void test_check_accepts_complete_trait_impl_and_warns_on_extra_method() {
     ok_vm.check_string(
         R"(
             trait Greeter {
-                fn greet(self) -> String;
+                fn greet(self) -> string;
             }
 
-            struct Cat { name: String }
+            struct Cat { name: string }
 
             impl Greeter for Cat {
-                fn greet(self) -> String {
+                fn greet(self) -> string {
                     return self.name;
                 }
             }
@@ -114,11 +114,11 @@ void test_check_reports_function_signature_mismatch_with_definition_location() {
     try {
         vm.check_string(
             R"(
-                fn add(a: Int, b: Int) -> Int {
+                fn add(a: int, b: int) -> int {
                     return a + b;
                 }
 
-                fn run() -> Int {
+                fn run() -> int {
                     return add(1, 2, 3);
                 }
             )",
@@ -142,7 +142,7 @@ void test_check_warns_for_optional_chain_nil_propagation() {
     StreamCapture warnings(std::cerr);
     vm.check_string(
         R"(
-            struct Node { next: Any }
+            struct Node { next: any }
 
             fn run(node: Node) -> Nil {
                 node?.next.missing();
@@ -166,13 +166,13 @@ void test_check_rejects_module_member_that_is_not_exported() {
     const auto entry_path = temp_dir / "main.zph";
     {
         std::ofstream out(module_path);
-        out << "export fn ok() -> Int { return 1; }\n"
-               "fn hidden() -> Int { return 2; }\n";
+        out << "export fn ok() -> int { return 1; }\n"
+               "fn hidden() -> int { return 2; }\n";
     }
     {
         std::ofstream out(entry_path);
         out << "import \"foo.zph\" as foo;\n"
-               "fn run() -> Int {\n"
+               "fn run() -> int {\n"
                "    return foo.hidden();\n"
                "}\n";
     }
@@ -196,7 +196,7 @@ void test_check_warns_for_non_exhaustive_match_cases() {
     StreamCapture warnings(std::cerr);
     vm.check_string(
         R"(
-            fn classify(value: Any) -> Int {
+            fn classify(value: any) -> int {
                 return match value {
                     nil => 0,
                 };
@@ -205,7 +205,7 @@ void test_check_warns_for_non_exhaustive_match_cases() {
         "unit_check_match_hint",
         std::filesystem::current_path());
 
-    require(warnings.str().find("warning: match may not cover all cases: missing String patterns") != std::string::npos,
+    require(warnings.str().find("warning: match may not cover all cases: missing string patterns") != std::string::npos,
             "check_string should warn when a match leaves obvious cases uncovered");
 }
 
@@ -223,7 +223,7 @@ void test_package_root_imports_lib_entry() {
     }
     {
         std::ofstream out(temp_dir / "src" / "lib.zph");
-        out << "export fn add(a: Int, b: Int) -> Int {\n"
+        out << "export fn add(a: int, b: int) -> int {\n"
                "    return a + b;\n"
                "}\n";
     }
@@ -237,7 +237,7 @@ void test_package_root_imports_lib_entry() {
         R"(
             import "lib" as lib;
 
-            fn run() -> Int {
+            fn run() -> int {
                 return lib.add(2, 3);
             }
         )",
@@ -248,7 +248,7 @@ void test_package_root_imports_lib_entry() {
         R"(
             import "lib" as lib;
 
-            fn run() -> Int {
+            fn run() -> int {
                 return lib.add(2, 3);
             }
         )",
@@ -267,9 +267,9 @@ void test_bytecode_loop_and_branch() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn accumulate(limit: Int) -> Int {
-                let mut total: Int = 0;
-                let mut i: Int = 0;
+            fn accumulate(limit: int) -> int {
+                let mut total: int = 0;
+                let mut i: int = 0;
                 while i < limit {
                     if i == 2 || i == 4 {
                         total = total + 10;
@@ -297,8 +297,8 @@ void test_bytecode_for_in_array() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn sum_large(values) -> Int {
-                let mut total: Int = 0;
+            fn sum_large(values) -> int {
+                let mut total: int = 0;
                 for value in values {
                     if value > 2 {
                         total = total + value;
@@ -326,16 +326,16 @@ void test_bytecode_for_in_range_syntax() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn sum_exclusive(limit: Int) -> Int {
-                let mut total: Int = 0;
+            fn sum_exclusive(limit: int) -> int {
+                let mut total: int = 0;
                 for value in 0..limit {
                     total = total + value;
                 }
                 return total;
             }
 
-            fn sum_inclusive(limit: Int) -> Int {
-                let mut total: Int = 0;
+            fn sum_inclusive(limit: int) -> int {
+                let mut total: int = 0;
                 for value in 0..=limit {
                     total = total + value;
                 }
@@ -362,10 +362,10 @@ void test_bytecode_struct_enum_match() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            struct Point { x: Int, y: Int }
-            enum Command { Move(Int, Int), Idle }
+            struct Point { x: int, y: int }
+            enum Command { Move(int, int), Idle }
 
-            fn drive(flag: Bool) -> Int {
+            fn drive(flag: bool) -> int {
                 let point = Point { x: 3, y: 4 };
                 let mut command = Command::Idle;
                 if flag {
@@ -395,15 +395,15 @@ void test_bytecode_local_slots_shadow_and_closure_sync() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn shadow_and_closure() -> Int {
-                let mut current: Int = 1;
-                let inc = fn(step: Int) -> Int {
+            fn shadow_and_closure() -> int {
+                let mut current: int = 1;
+                let inc = fn(step: int) -> int {
                     current = current + step;
                     return current;
                 };
-                let outer: Int = 5;
+                let outer: int = 5;
                 {
-                    let outer: Int = 20;
+                    let outer: int = 20;
                     if outer != 20 {
                         return -100;
                     }
@@ -426,8 +426,8 @@ void test_coroutine_upvalue_bytecode_avoids_ast_fallback() {
     vm.execute_string(
         R"(
             fn make_counter() -> Coroutine {
-                let mut current: Int = 4;
-                return coroutine fn() -> Int {
+                let mut current: int = 4;
+                return coroutine fn() -> int {
                     current = current + 2;
                     yield current;
                     current = current + 3;
@@ -469,16 +469,15 @@ void test_transitive_upvalue_bindings_support_nested_closure_after_outer_return(
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn drive() -> Int {
+            fn drive() -> int {
                 let inner = (fn() -> Function {
-                    let mut seed: Int = 3;
+                    let mut seed: int = 3;
                     let build = fn() -> Function {
-                        return fn(step: Int) -> Int {
+                        return fn(step: int) -> int {
                             seed += step;
                             return seed;
                         };
@@ -515,20 +514,19 @@ void test_compound_member_and_index_assignment_run_on_native_bytecode_path() {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
             struct Box {
-                value: Int,
+                value: int,
             }
 
-            fn drive() -> Int {
+            fn drive() -> int {
                 let run = (fn() -> Function {
                     let mut values = [1];
                     let mut box = Box { value: 10 };
-                    return fn() -> Int {
+                    return fn() -> int {
                         values[0] += 1;
                         box.value += 2;
                         return values[0] + box.value;
@@ -566,19 +564,18 @@ void test_resume_expression_runs_on_native_bytecode_path() {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn drive() -> Int {
+            fn drive() -> int {
                 let run = (fn() -> Function {
-                    let counter = coroutine fn() -> Int {
+                    let counter = coroutine fn() -> int {
                         yield 1;
                         return 2;
                     };
 
-                    return fn() -> Int {
+                    return fn() -> int {
                         return resume counter;
                     };
                 })();
@@ -614,8 +611,8 @@ void test_module_bytecode_import_and_top_level_execution() {
     {
         std::ofstream dep(dep_path);
         dep << R"(
-            export let seed: Int = 38;
-            export fn add_bonus(value: Int) -> Int {
+            export let seed: int = 38;
+            export fn add_bonus(value: int) -> int {
                 return value + 1;
             }
         )";
@@ -626,14 +623,14 @@ void test_module_bytecode_import_and_top_level_execution() {
         main << R"(
             import "dep.zph";
 
-            let mut total: Int = add_bonus(seed);
+            let mut total: int = add_bonus(seed);
             let values = [1, 2];
 
             for value in values {
                 total = total + value;
             }
 
-            export fn result() -> Int {
+            export fn result() -> int {
                 return total;
             }
         )";
@@ -662,7 +659,7 @@ void test_module_bytecode_cache_reuse_and_invalidation() {
     {
         std::ofstream main(main_path);
         main << R"(
-            export fn value(input: Int) -> Int {
+            export fn value(input: int) -> int {
                 return input + 1;
             }
         )";
@@ -689,7 +686,7 @@ void test_module_bytecode_cache_reuse_and_invalidation() {
     {
         std::ofstream main(main_path, std::ios::trunc);
         main << R"(
-            export fn value(input: Int) -> Int {
+            export fn value(input: int) -> int {
                 return input + 2;
             }
         )";
@@ -712,7 +709,7 @@ void test_break_continue_and_compound_assignment() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn main() -> Int {
+            fn main() -> int {
                 let mut total = 0;
                 let mut i = 0;
                 while i < 8 {
@@ -772,11 +769,11 @@ void test_v2_global_and_module_name_slots_use_cached_bindings() {
 
             after += value;
 
-            fn read() -> Int {
+            fn read() -> int {
                 return after;
             }
 
-            fn nested_global() -> Int {
+            fn nested_global() -> int {
                 {
                     let filler0 = 0;
                     let filler1 = 1;
@@ -789,7 +786,7 @@ void test_v2_global_and_module_name_slots_use_cached_bindings() {
             }
 
             fn nested_global_coroutine() -> Coroutine {
-                return coroutine fn() -> Int {
+                return coroutine fn() -> int {
                     {
                         let filler0 = 10;
                         let filler1 = 11;
@@ -802,7 +799,7 @@ void test_v2_global_and_module_name_slots_use_cached_bindings() {
                 };
             }
 
-            fn locals() -> Int {
+            fn locals() -> int {
                 let mut head = 7;
                 let tail0 = 0;
                 let tail1 = 1;
@@ -915,7 +912,7 @@ void test_phase1_1_lightweight_call_skips_environment_allocation() {
     // A simple pure function that uses only local slots (no scopes, no globals).
     // The compiler should set uses_only_locals_and_upvalues = true.
     vm.execute_string(R"(
-        fn add(a: Int, b: Int) -> Int {
+        fn add(a: int, b: int) -> int {
             return a + b;
         }
     )", "lightweight_test", std::filesystem::current_path());
@@ -929,7 +926,7 @@ void test_phase1_1_lightweight_call_skips_environment_allocation() {
     for (int i = 0; i < 100; ++i) {
         auto result = vm.call(*handle, {zephyr::ZephyrValue(static_cast<std::int64_t>(i)),
                                          zephyr::ZephyrValue(static_cast<std::int64_t>(i + 1))});
-        require(result.is_int(), "lightweight: result must be Int");
+        require(result.is_int(), "lightweight: result must be int");
         require(result.as_int() == static_cast<std::int64_t>(2 * i + 1),
                 "lightweight: result must equal i + (i+1)");
     }
@@ -949,13 +946,13 @@ void test_phase1_1_nested_closure_with_upvalue_mutation() {
     // 3-level nested closure with mutable upvalue — tests that upvalue cell
     // sharing works correctly even when the inner function uses lightweight path.
     vm.execute_string(R"(
-        fn outer() -> Int {
+        fn outer() -> int {
             let mut x = 10;
-            let inc = fn() -> Int {
+            let inc = fn() -> int {
                 x = x + 1;
                 return x;
             };
-            let get = fn() -> Int { return x; };
+            let get = fn() -> int { return x; };
 
             let mut sum = 0;
             sum = sum + inc();
@@ -963,7 +960,7 @@ void test_phase1_1_nested_closure_with_upvalue_mutation() {
             sum = sum + get();
             return sum;
         }
-        export fn run() -> Int {
+        export fn run() -> int {
             return outer();
         }
     )", "nested_upvalue_test", std::filesystem::current_path());
@@ -972,7 +969,7 @@ void test_phase1_1_nested_closure_with_upvalue_mutation() {
     require(handle.has_value(), "nested upvalue: run function must exist");
 
     auto call_result = vm.call(*handle, {});
-    require(call_result.is_int(), "nested upvalue: result must be Int");
+    require(call_result.is_int(), "nested upvalue: result must be int");
     // inc() returns 11, 12; get() returns 12 (shared mutable upvalue); sum = 11 + 12 + 12 = 35
     require(call_result.as_int() == 35,
             "nested upvalue: sum must be 35 (got " + std::to_string(call_result.as_int()) + ")");
@@ -984,7 +981,7 @@ void test_phase1_2_constant_folding_reduces_bytecode() {
 
     // A function with constant arithmetic should be folded at compile time.
     vm.execute_string(R"(
-        fn compute() -> Int {
+        fn compute() -> int {
             return 1 + 2 * 3;
         }
     )", "fold_test", std::filesystem::current_path());
@@ -1019,13 +1016,13 @@ void test_wave_a_int_arithmetic_fastpath() {
     vm.install_core();
 
     vm.execute_string(R"(
-        fn fib(n: Int) -> Int {
+        fn fib(n: int) -> int {
             if n <= 1 {
                 return n;
             }
             return fib(n - 1) + fib(n - 2);
         }
-        export fn run() -> Int {
+        export fn run() -> int {
             return fib(30);
         }
     )", "int_fastpath_test", std::filesystem::current_path());
@@ -1039,7 +1036,7 @@ void test_wave_a_int_arithmetic_fastpath() {
 
     // Test comparison operators via sorting-like logic
     vm.execute_string(R"(
-        export fn compare_ops(a: Int, b: Int) -> Int {
+        export fn compare_ops(a: int, b: int) -> int {
             let mut score = 0;
             if a < b  { score = score + 1; }
             if a <= b { score = score + 2; }
@@ -1098,7 +1095,7 @@ void test_generic_function_execution() {
     vm.execute_string(R"(
         fn identity<T>(x: T) -> T { return x; }
         fn swap<A, B>(a: A, b: B) -> B { return b; }
-        export fn run_identity() -> Int { return identity<int>(42); }
+        export fn run_identity() -> int { return identity<int>(42); }
     )", "unit_generic_fn_exec", std::filesystem::current_path());
     const auto handle = vm.get_function("unit_generic_fn_exec", "run_identity");
     require(handle.has_value(), "generic function execution: run_identity must exist");
@@ -1114,7 +1111,7 @@ void test_generic_struct_instantiation() {
             first: A,
             second: B,
         }
-        export fn run_pair() -> Int {
+        export fn run_pair() -> int {
             let p = Pair { first: 10, second: "world" };
             return p.first;
         }
@@ -1130,7 +1127,7 @@ void test_generic_multi_param_function() {
     zephyr::ZephyrVM vm;
     vm.execute_string(R"(
         fn first<A, B>(a: A, b: B) -> A { return a; }
-        export fn run_first() -> Int { return first<int, string>(99, "ignored"); }
+        export fn run_first() -> int { return first<int, string>(99, "ignored"); }
     )", "unit_generic_multi_param", std::filesystem::current_path());
     const auto handle = vm.get_function("unit_generic_multi_param", "run_first");
     require(handle.has_value(), "generic multi-param function: run_first must exist");
@@ -1143,14 +1140,14 @@ void test_wave_l_result_ok_err() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            export fn run_ok() -> Int {
+            export fn run_ok() -> int {
                 let r = Ok(42);
                 return match r {
                     Ok(v)  => v,
                     Err(_) => 0,
                 };
             }
-            export fn run_err() -> Int {
+            export fn run_err() -> int {
                 let r = Err("oops");
                 return match r {
                     Ok(v)  => v,
@@ -1176,22 +1173,22 @@ void test_wave_l_result_question_op() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn safe_dec(a: Int) {
+            fn safe_dec(a: int) {
                 if a == 0 { return Err("zero"); }
                 return Ok(a - 1);
             }
-            fn compute(a: Int) {
+            fn compute(a: int) {
                 let x = safe_dec(a)?;
                 return Ok(x + 10);
             }
-            export fn ok_case() -> Int {
+            export fn ok_case() -> int {
                 let r = compute(5);
                 return match r {
                     Ok(v)  => v,
                     Err(_) => -1,
                 };
             }
-            export fn err_case() -> Int {
+            export fn err_case() -> int {
                 let r = compute(0);
                 return match r {
                     Ok(v)  => v,
@@ -1217,7 +1214,7 @@ void test_wave_l_array_pattern() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            export fn describe_empty() -> Int {
+            export fn describe_empty() -> int {
                 let arr = [];
                 return match arr {
                     []             => 0,
@@ -1225,7 +1222,7 @@ void test_wave_l_array_pattern() {
                     [a, b, ..rest] => 2,
                 };
             }
-            export fn describe_one() -> Int {
+            export fn describe_one() -> int {
                 let arr = [99];
                 return match arr {
                     []             => 0,
@@ -1233,7 +1230,7 @@ void test_wave_l_array_pattern() {
                     [a, b, ..rest] => 2,
                 };
             }
-            export fn describe_many() -> Int {
+            export fn describe_many() -> int {
                 let arr = [10, 20, 30, 40];
                 return match arr {
                     []             => 0,
@@ -1265,15 +1262,15 @@ void test_wave_l_struct_pattern() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            struct Point { x: Int, y: Int }
-            export fn classify_origin() -> Int {
+            struct Point { x: int, y: int }
+            export fn classify_origin() -> int {
                 let p = Point { x: 0, y: 0 };
                 return match p {
                     Point { x: 0, y: 0 } => 0,
                     Point { x, y }       => x + y,
                 };
             }
-            export fn classify_general() -> Int {
+            export fn classify_general() -> int {
                 let p = Point { x: 3, y: 4 };
                 return match p {
                     Point { x: 0, y } => y,
@@ -1299,15 +1296,15 @@ void test_wave_l_nested_pattern() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            struct Point { x: Int, y: Int }
-            export fn nested_ok() -> Int {
+            struct Point { x: int, y: int }
+            export fn nested_ok() -> int {
                 let r = Ok(Point { x: 1, y: 2 });
                 return match r {
                     Ok(Point { x, y }) => x + y,
                     Err(_)             => -1,
                 };
             }
-            export fn nested_err() -> Int {
+            export fn nested_err() -> int {
                 let r = Err("bad");
                 return match r {
                     Ok(Point { x, y }) => x + y,
@@ -1338,12 +1335,12 @@ void test_named_import() {
     const auto main_path = base_dir / "main.zph";
     {
         std::ofstream out(lib_path);
-        out << "export let foo: Int = 42;\nexport let bar: Int = 7;\n";
+        out << "export let foo: int = 42;\nexport let bar: int = 7;\n";
     }
     {
         std::ofstream out(main_path);
         out << "import { foo } from \"lib.zph\";\n"
-               "export fn get_foo() -> Int { return foo; }\n";
+               "export fn get_foo() -> int { return foo; }\n";
     }
 
     zephyr::ZephyrVM vm;
@@ -1368,7 +1365,7 @@ void test_re_export() {
     const auto main_path   = base_dir / "main.zph";
     {
         std::ofstream out(lib_path);
-        out << "export let foo: Int = 99;\n";
+        out << "export let foo: int = 99;\n";
     }
     {
         std::ofstream out(middle_path);
@@ -1377,7 +1374,7 @@ void test_re_export() {
     {
         std::ofstream out(main_path);
         out << "import { foo } from \"middle.zph\";\n"
-               "export fn get_foo() -> Int { return foo; }\n";
+               "export fn get_foo() -> int { return foo; }\n";
     }
 
     zephyr::ZephyrVM vm;
@@ -1401,11 +1398,11 @@ void test_circular_import_error() {
     const auto b_path = temp_dir / "b.zph";
     {
         std::ofstream out(a_path);
-        out << "import \"b.zph\";\nlet x: Int = 1;\n";
+        out << "import \"b.zph\";\nlet x: int = 1;\n";
     }
     {
         std::ofstream out(b_path);
-        out << "import \"a.zph\";\nlet y: Int = 2;\n";
+        out << "import \"a.zph\";\nlet y: int = 2;\n";
     }
 
     bool rejected = false;
@@ -1432,14 +1429,14 @@ void test_std_math() {
         R"(
             import { floor, sqrt, clamp, pi, min, max, pow, abs } from "std/math";
 
-            export fn check_floor() -> Bool { return floor(3.9) == 3.0; }
-            export fn check_sqrt()  -> Bool { return sqrt(4.0) == 2.0; }
-            export fn check_pi()    -> Bool { return pi > 3.14; }
-            export fn check_clamp() -> Bool { return clamp(10.0, 0.0, 5.0) == 5.0; }
-            export fn check_min()   -> Bool { return min(3.0, 7.0) == 3.0; }
-            export fn check_max()   -> Bool { return max(3.0, 7.0) == 7.0; }
-            export fn check_abs()   -> Bool { return abs(-4.0) == 4.0; }
-            export fn check_pow()   -> Bool { return pow(2.0, 3.0) == 8.0; }
+            export fn check_floor() -> bool { return floor(3.9) == 3.0; }
+            export fn check_sqrt()  -> bool { return sqrt(4.0) == 2.0; }
+            export fn check_pi()    -> bool { return pi > 3.14; }
+            export fn check_clamp() -> bool { return clamp(10.0, 0.0, 5.0) == 5.0; }
+            export fn check_min()   -> bool { return min(3.0, 7.0) == 3.0; }
+            export fn check_max()   -> bool { return max(3.0, 7.0) == 7.0; }
+            export fn check_abs()   -> bool { return abs(-4.0) == 4.0; }
+            export fn check_pow()   -> bool { return pow(2.0, 3.0) == 8.0; }
         )",
         "unit_std_math",
         std::filesystem::current_path());
@@ -1462,15 +1459,15 @@ void test_std_string() {
         R"(
             import { upper, lower, contains, len, starts_with, ends_with, trim, replace, substr } from "std/string";
 
-            export fn check_upper()       -> Bool { return upper("hello") == "HELLO"; }
-            export fn check_lower()       -> Bool { return lower("WORLD") == "world"; }
-            export fn check_contains()    -> Bool { return contains("hello world", "world") == true; }
-            export fn check_len()         -> Bool { return len("abc") == 3; }
-            export fn check_starts_with() -> Bool { return starts_with("zephyr", "zep") == true; }
-            export fn check_ends_with()   -> Bool { return ends_with("zephyr", "hyr") == true; }
-            export fn check_trim()        -> Bool { return trim("  hi  ") == "hi"; }
-            export fn check_replace()     -> Bool { return replace("hello", "l", "r") == "herro"; }
-            export fn check_substr()      -> Bool { return substr("hello", 1, 3) == "ell"; }
+            export fn check_upper()       -> bool { return upper("hello") == "HELLO"; }
+            export fn check_lower()       -> bool { return lower("WORLD") == "world"; }
+            export fn check_contains()    -> bool { return contains("hello world", "world") == true; }
+            export fn check_len()         -> bool { return len("abc") == 3; }
+            export fn check_starts_with() -> bool { return starts_with("zephyr", "zep") == true; }
+            export fn check_ends_with()   -> bool { return ends_with("zephyr", "hyr") == true; }
+            export fn check_trim()        -> bool { return trim("  hi  ") == "hi"; }
+            export fn check_replace()     -> bool { return replace("hello", "l", "r") == "herro"; }
+            export fn check_substr()      -> bool { return substr("hello", 1, 3) == "ell"; }
         )",
         "unit_std_string",
         std::filesystem::current_path());

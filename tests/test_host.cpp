@@ -17,11 +17,11 @@ void test_snapshot_restore() {
             let mut score = 7;
             let mut values = [1, 2, 3];
 
-            fn read_score() -> Int {
+            fn read_score() -> int {
                 return score + values[1];
             }
 
-            fn mutate() -> Int {
+            fn mutate() -> int {
                 score = 40;
                 values[1] = 9;
                 return read_score();
@@ -79,7 +79,7 @@ void test_host_object() {
 
     vm.execute_string(
         R"(
-            fn touch() -> Int {
+            fn touch() -> int {
                 let c = counter();
                 c.inc();
                 c.value = c.value + 10;
@@ -130,19 +130,18 @@ void test_host_object_identity_and_long_lived_handle() {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn same_counter() -> Bool {
+            fn same_counter() -> bool {
                 let a = counter();
                 force_gc();
                 let b = counter();
                 return a == b;
             }
 
-            fn touch_retained(c: HostObject) -> Int {
+            fn touch_retained(c: HostObject) -> int {
                 force_gc();
                 c.inc();
                 return c.value;
@@ -176,24 +175,22 @@ void test_name_based_event_registration_and_error_propagation() {
             damage_handler_name = args.at(0).as_string();
             return zephyr::ZephyrValue();
         },
-        {"String"},
-        "Nil");
+        {"string"}, "Nil");
     vm.register_global_function(
         "register_failure_handler",
         [&](const std::vector<zephyr::ZephyrValue>& args) {
             failing_handler_name = args.at(0).as_string();
             return zephyr::ZephyrValue();
         },
-        {"String"},
-        "Nil");
+        {"string"}, "Nil");
 
     vm.execute_string(
         R"(
-            fn on_damage(amount: Int) -> Int {
+            fn on_damage(amount: int) -> int {
                 return amount + 3;
             }
 
-            fn on_fault(amount: Int) -> Int {
+            fn on_fault(amount: int) -> int {
                 assert(amount < 0);
                 return amount;
             }
@@ -260,9 +257,9 @@ void test_frame_handle_storage_and_capture_are_rejected() {
 
     vm.execute_string(
         R"(
-            fn build_bad_closure() -> Int {
+            fn build_bad_closure() -> int {
                 let temp = make_frame_counter();
-                let reader = fn() -> Int {
+                let reader = fn() -> int {
                     return temp.value;
                 };
                 return reader();
@@ -311,7 +308,7 @@ void test_handle_invalidation_and_epochs() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn read(counter: HostObject) -> Int {
+            fn read(counter: HostObject) -> int {
                 return counter.value;
             }
         )",
@@ -359,7 +356,7 @@ void test_v2_callback_handle_and_dump_bytecode() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn add_one(value: Int) -> Int {
+            fn add_one(value: int) -> int {
                 return value + 1;
             }
         )",
@@ -405,7 +402,7 @@ void test_wave_e1_class_binder() {
 
     vm.execute_string(
         R"(
-            fn run() -> Int {
+            fn run() -> int {
                 let player = make_player();
                 player.damage(4);
                 return player.hp;

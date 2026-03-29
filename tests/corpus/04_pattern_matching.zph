@@ -1,4 +1,4 @@
-fn classify(x: Int) -> String {
+fn classify(x: int) -> string {
     return match x {
         0 => "zero",
         1 | 2 | 3 => "small",

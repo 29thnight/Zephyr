@@ -1,8 +1,8 @@
 struct Vec2 {
-    x: Int,
-    y: Int,
+    x: int,
+    y: int,
 }
 
-fn length_hint(v: Vec2) -> Int {
+fn length_hint(v: Vec2) -> int {
     return v.x + v.y;
 }

@@ -1,5 +1,5 @@
-fn counter(limit: Int) {
-    return coroutine fn() -> Int {
+fn counter(limit: int) {
+    return coroutine fn() -> int {
         let mut i = 0;
         while i < limit {
             yield i;

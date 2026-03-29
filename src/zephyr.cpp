@@ -11,9 +11,9 @@ RuntimeResult<std::unique_ptr<Program>> Runtime::parse_source(const std::string&
     return parser.parse_program();
 }
 
-std::shared_ptr<BytecodeFunction> Runtime::compile_bytecode_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body) {
+std::shared_ptr<BytecodeFunction> Runtime::compile_bytecode_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body, const std::vector<std::string>& generic_params) {
     BytecodeCompiler compiler;
-    return compiler.compile(name, params, body);
+    return compiler.compile(name, params, body, false, generic_params);
 }
 
 std::shared_ptr<BytecodeFunction> Runtime::compile_module_bytecode(const std::string& name, Program* program) {

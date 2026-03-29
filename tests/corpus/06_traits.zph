@@ -1,11 +1,11 @@
 trait Greet {
-    fn greet(self) -> String;
+    fn greet(self) -> string;
 }
 
-struct Cat { name: String }
+struct Cat { name: string }
 
 impl Greet for Cat {
-    fn greet(self) -> String {
+    fn greet(self) -> string {
         return f"Meow, I am {self.name}";
     }
 }

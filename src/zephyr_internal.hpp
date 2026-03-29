@@ -319,6 +319,12 @@ enum class TokenType {
     KeywordTrue,
     KeywordFalse,
     KeywordNil,
+    KeywordInt,
+    KeywordFloat,
+    KeywordBool,
+    KeywordString,
+    KeywordVoid,
+    KeywordAny,
 };
 
 inline std::optional<TokenType> compound_assignment_binary_op(TokenType assignment_op) {

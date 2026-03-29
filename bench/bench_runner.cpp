@@ -424,7 +424,7 @@ namespace {
 
 std::string stable_asset_module_source() {
     return R"(
-        struct Exported { value: Int }
+        struct Exported { value: int }
 
         fn main() -> Array {
             let asset = stable_asset();
@@ -451,7 +451,7 @@ BenchmarkMeasurement run_hot_arithmetic_case(const BenchmarkOptions& options) {
     ZephyrVM vm(options.config);
     vm.execute_string(
         R"(
-            fn main() -> Int {
+            fn main() -> int {
                 let mut acc = 0;
                 let mut i = 0;
                 while i < 20000 {
@@ -474,9 +474,9 @@ BenchmarkMeasurement run_array_object_churn_case(const BenchmarkOptions& options
     ZephyrVM vm(options.config);
     vm.execute_string(
         R"(
-            struct Pair { left: Int, right: Int }
+            struct Pair { left: int, right: int }
 
-            fn main() -> Int {
+            fn main() -> int {
                 let mut total = 0;
                 let mut i = 0;
                 while i < 2500 {
@@ -526,7 +526,7 @@ BenchmarkMeasurement run_host_handle_case(const BenchmarkOptions& options) {
         "HostObject");
     vm.execute_string(
         R"(
-            fn main() -> Int {
+            fn main() -> int {
                 let p = player();
                 let mut total = 0;
                 let mut i = 0;
@@ -551,8 +551,8 @@ BenchmarkMeasurement run_coroutine_case(const BenchmarkOptions& options) {
     ZephyrVM vm(options.config);
     vm.execute_string(
         R"(
-            fn make_counter(limit: Int) -> Coroutine {
-                return coroutine fn() -> Int {
+            fn make_counter(limit: int) -> Coroutine {
+                return coroutine fn() -> int {
                     let mut i = 0;
                     while i < limit {
                         yield i;

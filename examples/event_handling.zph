@@ -1,11 +1,11 @@
 import "engine" as engine;
 
-fn on_player_damaged(amount: Int) -> Int {
+fn on_player_damaged(amount: int) -> int {
     engine.log("event.damage", amount);
     return amount + 3;
 }
 
-fn on_faulty_damage(amount: Int) -> Int {
+fn on_faulty_damage(amount: int) -> int {
     assert(amount < 0);
     return amount;
 }

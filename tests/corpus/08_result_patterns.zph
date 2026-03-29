@@ -1,14 +1,14 @@
-fn safe_div(a: Int, b: Int) {
+fn safe_div(a: int, b: int) {
     if b == 0 { return Err("zero"); }
     return Ok(a - b);
 }
 
-fn compute(x: Int, y: Int) {
+fn compute(x: int, y: int) {
     let q = safe_div(x, y)?;
     return Ok(q + 2);
 }
 
-struct Vec2 { x: Int, y: Int }
+struct Vec2 { x: int, y: int }
 
 fn classify(v: Vec2) {
     return match v {

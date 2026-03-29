@@ -45,10 +45,26 @@ private:
 
     bool lookahead_type_ref(std::size_t& offset) const {
         const Token* token = peek_offset(offset);
-        if (token == nullptr || token->type != TokenType::Identifier) {
+        if (token == nullptr) {
+            return false;
+        }
+        // Accept plain identifiers or lowercase primitive keyword types
+        const bool is_type_token = token->type == TokenType::Identifier ||
+            token->type == TokenType::KeywordInt    ||
+            token->type == TokenType::KeywordFloat  ||
+            token->type == TokenType::KeywordBool   ||
+            token->type == TokenType::KeywordString ||
+            token->type == TokenType::KeywordVoid   ||
+            token->type == TokenType::KeywordAny;
+        if (!is_type_token) {
             return false;
         }
         ++offset;
+
+        // Primitive keyword types cannot have '::' segments — only identifiers can
+        if (token->type != TokenType::Identifier) {
+            return true;
+        }
 
         while (true) {
             token = peek_offset(offset);
@@ -561,6 +577,25 @@ VoidResult Parser::parse_function_signature(std::vector<Param>& params, std::opt
 RuntimeResult<TypeRef> Parser::parse_type_ref() {
     TypeRef type;
     type.span = peek().span;
+
+    // Accept lowercase primitive keyword tokens as type names
+    static const std::unordered_map<TokenType, std::string> kPrimitiveTypeNames = {
+        {TokenType::KeywordInt,    "int"},
+        {TokenType::KeywordFloat,  "float"},
+        {TokenType::KeywordBool,   "bool"},
+        {TokenType::KeywordString, "string"},
+        {TokenType::KeywordVoid,   "void"},
+        {TokenType::KeywordAny,    "any"},
+    };
+
+    auto prim_it = kPrimitiveTypeNames.find(peek().type);
+    if (prim_it != kPrimitiveTypeNames.end()) {
+        advance();  // consume the keyword token
+        type.parts.push_back(prim_it->second);
+        return type;
+    }
+
+    // Existing path: plain identifier (user-defined types like Point, Color, T, U...)
     ZEPHYR_TRY_ASSIGN(type_name, consume(TokenType::Identifier, "Expected type name."));
     type.parts.push_back(type_name.lexeme);
     while (match({TokenType::DoubleColon})) {

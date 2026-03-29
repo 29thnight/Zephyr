@@ -7,8 +7,8 @@ void test_coroutine_trace_report_sequence() {
     vm.execute_string(
         R"(
             fn make_counter() -> Coroutine {
-                let mut current: Int = 4;
-                return coroutine fn() -> Int {
+                let mut current: int = 4;
+                return coroutine fn() -> int {
                     current = current + 2;
                     yield current;
                     current = current + 3;
@@ -154,14 +154,14 @@ void test_wave_e1_profiler_report() {
 
     vm.execute_string(
         R"(
-            fn fib(n: Int) -> Int {
+            fn fib(n: int) -> int {
                 if n <= 1 {
                     return n;
                 }
                 return fib(n - 1) + fib(n - 2);
             }
 
-            export fn run() -> Int {
+            export fn run() -> int {
                 return fib(10);
             }
         )",
@@ -194,8 +194,8 @@ void test_wave_f_coroutine_trace_report() {
 
     vm.execute_string(
         R"(
-            export fn run() -> Int {
-                let worker = coroutine fn() -> Int {
+            export fn run() -> int {
+                let worker = coroutine fn() -> int {
                     yield 1;
                     return 2;
                 };

@@ -1,4 +1,4 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// Part of src/zephyr.cpp — included by zephyr.cpp
 struct GcObject;
 enum class HandleContainerKind : std::uint8_t {
     Stack,

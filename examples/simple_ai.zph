@@ -1,14 +1,14 @@
 enum Intent {
     Patrol,
-    Chase(Int),
+    Chase(int),
     Retreat,
 }
 
 struct EnemyState {
-    hp: Int,
-    sees_player: Bool,
-    distance: Int,
-    allies_nearby: Int,
+    hp: int,
+    sees_player: bool,
+    distance: int,
+    allies_nearby: int,
 }
 
 fn choose_intent(state: EnemyState) -> Intent {
@@ -23,7 +23,7 @@ fn choose_intent(state: EnemyState) -> Intent {
     return Intent::Patrol;
 }
 
-fn score_intent(intent: Intent) -> Int {
+fn score_intent(intent: Intent) -> int {
     return match intent {
         Intent::Patrol => 1,
         Intent::Chase(distance) => 20 - distance,
@@ -31,7 +31,7 @@ fn score_intent(intent: Intent) -> Int {
     };
 }
 
-fn main() -> Int {
+fn main() -> int {
     let state = EnemyState {
         hp: 45,
         sees_player: true,

@@ -6,9 +6,9 @@ void test_incremental_gc_stats_progress() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn churn(limit: Int) -> Int {
-                let mut total: Int = 0;
-                let mut i: Int = 0;
+            fn churn(limit: int) -> int {
+                let mut total: int = 0;
+                let mut i: int = 0;
                 while i < limit {
                     let values = [i, i + 1, i + 2, i + 3];
                     total = total + values[0];
@@ -38,13 +38,13 @@ void test_string_literal_interning_tracks_hits_and_misses() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            export fn short_literals_match() -> Bool {
+            export fn short_literals_match() -> bool {
                 let a = "intern-me";
                 let b = "intern-me";
                 return a == b;
             }
 
-            export fn long_literals_match() -> Bool {
+            export fn long_literals_match() -> bool {
                 let a = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
                 let b = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
                 return a == b;
@@ -71,12 +71,12 @@ void test_gc_verify_full_and_dirty_barrier_dedup() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            let mut counter: Int = 0;
+            let mut counter: int = 0;
             let items = [0];
 
-            fn churn(limit: Int) -> Int {
-                let mut total: Int = 0;
-                let mut i: Int = 0;
+            fn churn(limit: int) -> int {
+                let mut total: int = 0;
+                let mut i: int = 0;
                 while i < limit {
                     let values = [i, i + 1, i + 2, i + 3];
                     total = total + values[0];
@@ -85,8 +85,8 @@ void test_gc_verify_full_and_dirty_barrier_dedup() {
                 return total;
             }
 
-            fn mutate_many(limit: Int) -> Int {
-                let mut i: Int = 0;
+            fn mutate_many(limit: int) -> int {
+                let mut i: int = 0;
                 while i < limit {
                     counter = counter + 1;
                     items[0] = counter;
@@ -141,9 +141,9 @@ void test_gc_stress_mode_advances_at_bytecode_safe_points() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn churn(limit: Int) -> Int {
-                let mut total: Int = 0;
-                let mut i: Int = 0;
+            fn churn(limit: int) -> int {
+                let mut total: int = 0;
+                let mut i: int = 0;
                 while i < limit {
                     let values = [i, i + 1, i + 2, i + 3];
                     total = total + values[0];
@@ -220,13 +220,12 @@ void test_gc_preserves_temporary_callee_during_collection() {
                 vm.collect_garbage();
                 return zephyr::ZephyrValue();
             },
-            {},
-            "Nil");
+            {}, "Nil");
 
         vm.execute_string(
             R"(
-                fn run() -> Int {
-                    return (fn() -> Int {
+                fn run() -> int {
+                    return (fn() -> int {
                         let values = [7, 11, 13];
                         force_gc();
                         return values[1];
@@ -252,7 +251,7 @@ void test_gc_pause_stats_api() {
     vm.execute_string(
         R"(
             let values = [1, 2, 3, 4];
-            export fn read() -> Int {
+            export fn read() -> int {
                 return values[0];
             }
         )",
@@ -281,7 +280,7 @@ void test_gc_trace_json_export() {
     vm.execute_string(
         R"(
             let values = [1, 2, 3, 4];
-            export fn read() -> Int {
+            export fn read() -> int {
                 return values[0];
             }
         )",
@@ -325,16 +324,16 @@ void test_v2_minor_remembered_set_preserves_old_to_young_edges() {
         R"(
             let holder = [0];
 
-            fn attach(value: Int) -> Int {
+            fn attach(value: int) -> int {
                 holder[0] = [value];
                 return len(holder[0]);
             }
 
-            fn read() -> Int {
+            fn read() -> int {
                 return holder[0][0];
             }
 
-            fn clear() -> Int {
+            fn clear() -> int {
                 holder[0] = 0;
                 return 0;
             }
@@ -381,20 +380,20 @@ void test_v2_struct_cards_preserve_old_to_young_field_edges() {
     zephyr::ZephyrVM vm(config);
     vm.execute_string(
         R"(
-            struct Holder { value: Any }
+            struct Holder { value: any }
 
             let holder = Holder { value: 0 };
 
-            fn attach(value: Int) -> Int {
+            fn attach(value: int) -> int {
                 holder.value = [value];
                 return len(holder.value);
             }
 
-            fn read() -> Int {
+            fn read() -> int {
                 return holder.value[0];
             }
 
-            fn clear() -> Int {
+            fn clear() -> int {
                 holder.value = 0;
                 return 0;
             }
@@ -443,11 +442,11 @@ void test_v2_environment_cards_preserve_old_local_upvalue_cells() {
     vm.execute_string(
         R"(
             fn make_env_keeper() -> Coroutine {
-                return coroutine fn() -> Int {
+                return coroutine fn() -> int {
                     let mut value = 41;
                     yield 0;
                     let mut temporary = 0;
-                    temporary = fn() -> Int { return value + 1; };
+                    temporary = fn() -> int { return value + 1; };
                     temporary = 0;
                     yield 1;
                     return value + 1;
@@ -492,7 +491,7 @@ void test_v2_suspended_coroutine_cards_preserve_local_young_values() {
     vm.execute_string(
         R"(
             fn make_keeper() -> Coroutine {
-                return coroutine fn() -> Int {
+                return coroutine fn() -> int {
                     let values = [41];
                     yield 0;
                     return values[0] + 1;
@@ -529,11 +528,11 @@ void test_v2_suspended_coroutine_syncs_binding_backed_locals_before_yield() {
     vm.execute_string(
         R"(
             fn make_sync_keeper() -> Coroutine {
-                return coroutine fn() -> Int {
+                return coroutine fn() -> int {
                     let mut values = [1];
                     yield 0;
 
-                    let replace = fn() -> Int {
+                    let replace = fn() -> int {
                         values = [41];
                         return 0;
                     };
@@ -593,7 +592,7 @@ void test_gc_object_sizeof_baselines() {
         R"(
             let s = "hello world";
             let arr = [1, 2, 3];
-            struct Pt { x: Int, y: Int }
+            struct Pt { x: int, y: int }
             let p = Pt { x: 1, y: 2 };
         )",
         "unit_sizeof_baseline",
@@ -625,7 +624,7 @@ void test_phase7_compact_old_generation() {
                 i = i + 1;
             }
             let msg = "compaction test string that should survive";
-            struct Point { x: Int, y: Int }
+            struct Point { x: int, y: int }
             let mut points = [];
             let mut j = 0;
             while j < 10 {
@@ -667,7 +666,7 @@ void test_wave_a_barrier_young_owner_skips_remembered_set() {
     vm.install_core();
 
     vm.execute_string(R"(
-        export fn churn(n: Int) -> Int {
+        export fn churn(n: int) -> int {
             let mut total = 0;
             let mut i = 0;
             while i < n {

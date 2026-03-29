@@ -1,4 +1,4 @@
-fn mood_label(value: Int) -> String {
+fn mood_label(value: int) -> string {
     return match value {
         0 => "idle",
         1 => "walk",

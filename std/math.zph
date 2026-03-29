@@ -1,32 +1,32 @@
-export fn abs(x: Int) -> Int {
+export fn abs(x: int) -> int {
     if x < 0 {
         return 0 - x;
     }
     return x;
 }
 
-export fn min(a: Int, b: Int) -> Int {
+export fn min(a: int, b: int) -> int {
     if a < b {
         return a;
     }
     return b;
 }
 
-export fn max(a: Int, b: Int) -> Int {
+export fn max(a: int, b: int) -> int {
     if a > b {
         return a;
     }
     return b;
 }
 
-export fn clamp(v: Int, lo: Int, hi: Int) -> Int {
+export fn clamp(v: int, lo: int, hi: int) -> int {
     return min(max(v, lo), hi);
 }
 
-export fn pow(base: Int, exp: Int) -> Int {
+export fn pow(base: int, exp: int) -> int {
     assert(exp >= 0);
-    let mut result: Int = 1;
-    let mut i: Int = 0;
+    let mut result: int = 1;
+    let mut i: int = 0;
     while i < exp {
         result = result * base;
         i = i + 1;

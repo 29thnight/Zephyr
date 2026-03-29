@@ -1,4 +1,4 @@
-#include "zephyr/api.hpp"
+﻿#include "zephyr/api.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -248,10 +248,10 @@ std::string lsp_hover_content(const std::string& source, int line, int character
         {"match",  "match value { pattern => expr, ... }\nPattern matching expression"},
         {"struct", "struct Name { field: Type, ... }\nDefine a struct type"},
         {"class",  "class Name { ... }\nDefine a class"},
-        {"Int",    "Int\nInteger type (64-bit signed)"},
-        {"Float",  "Float\nFloating-point type (64-bit)"},
-        {"String", "String\nString type (UTF-8)"},
-        {"Bool",   "Bool\nBoolean type"},
+        {"int",    "int\nInteger type (64-bit signed)"},
+        {"float",  "float\nFloating-point type (64-bit)"},
+        {"string", "string\nString type (UTF-8)"},
+        {"bool",   "bool\nBoolean type"},
     };
 
     auto it = builtin_docs.find(word);
@@ -266,7 +266,7 @@ std::string lsp_completion_items() {
     static const std::vector<std::string> keywords = {
         "fn", "let", "if", "else", "while", "for", "return", "yield",
         "true", "false", "nil", "import", "export", "trait", "impl",
-        "match", "struct", "class", "Int", "Float", "String", "Bool"
+        "match", "struct", "class", "int", "float", "string", "bool"
     };
 
     std::ostringstream items;

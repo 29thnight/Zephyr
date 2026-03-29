@@ -1,3 +1,3 @@
-fn describe(name: String, hp: Int) -> String {
+fn describe(name: string, hp: int) -> string {
     return name + ":" + hp;
 }

@@ -1,4 +1,4 @@
-struct Node { value: Int, next: Any }
+struct Node { value: int, next: any }
 
 fn main() {
     let n = Node { value: 42, next: nil };

@@ -6,7 +6,7 @@ void test_execute_and_call() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn add(a: Int, b: Int) -> Int { return a + b; }
+            fn add(a: int, b: int) -> int { return a + b; }
         )",
         "unit_add",
         std::filesystem::current_path());
@@ -21,24 +21,24 @@ void test_trait_impl_dispatch() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            struct Player { x: Int, y: Int }
+            struct Player { x: int, y: int }
 
             trait Drawable {
-                fn draw(self) -> Int;
-                fn metric(self) -> Int;
+                fn draw(self) -> int;
+                fn metric(self) -> int;
             }
 
             impl Drawable for Player {
-                fn draw(self) -> Int {
+                fn draw(self) -> int {
                     return self.x + self.y;
                 }
 
-                fn metric(self) -> Int {
+                fn metric(self) -> int {
                     return self.x * self.y;
                 }
             }
 
-            fn render() -> Int {
+            fn render() -> int {
                 let player = Player { x: 3, y: 4 };
                 return player.draw() + player.metric();
             }
@@ -52,13 +52,33 @@ void test_trait_impl_dispatch() {
     require(result.is_int() && result.as_int() == 19, "trait impl dispatch returned wrong result");
 }
 
+void test_struct_literal_field_shorthand() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            struct Vec2 { x: int, y: int }
+
+            fn sum_coords(x: int, y: int) -> int {
+                let point = Vec2 { x, y };
+                return point.x + point.y;
+            }
+        )",
+        "unit_struct_shorthand",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_struct_shorthand", "sum_coords");
+    require(handle.has_value(), "missing sum_coords handle");
+    const auto result = vm.call(*handle, {zephyr::ZephyrValue(8), zephyr::ZephyrValue(13)});
+    require(result.is_int() && result.as_int() == 21, "struct field shorthand should bind to same-name locals");
+}
+
 void test_core_stdlib_helpers() {
     zephyr::ZephyrVM vm;
     const auto path = std::filesystem::current_path() / ".zephyr_core_stdlib_test.zph";
     {
         std::ofstream out(path);
         out << R"(
-            fn run() -> Int {
+            fn run() -> int {
                 let mut words = ["guard"];
                 words = push(words, "tower");
                 words = concat(words, ["north"]);
@@ -105,15 +125,15 @@ void test_stdlib_module_imports() {
             import "std/string" as strings;
             import "std/collections" as collections;
 
-            fn run() -> Int {
+            fn run() -> int {
                 let values = collections.range(1, 4);
-                let doubled = collections.map_array(values, fn(value: Int) -> Int {
+                let doubled = collections.map_array(values, fn(value: int) -> int {
                     return value * 2;
                 });
-                let sum = collections.fold_array(doubled, 0, fn(total: Int, value: Int) -> Int {
+                let sum = collections.fold_array(doubled, 0, fn(total: int, value: int) -> int {
                     return total + value;
                 });
-                let evens = collections.filter_array(doubled, fn(value: Int) -> Bool {
+                let evens = collections.filter_array(doubled, fn(value: int) -> bool {
                     return value > 3;
                 });
 
@@ -166,15 +186,15 @@ void test_runtime_error_includes_stack_trace() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn foo(value: Int) -> Int {
+            fn foo(value: int) -> int {
                 return value;
             }
 
-            fn bar() -> Int {
+            fn bar() -> int {
                 return foo("oops");
             }
 
-            fn run() -> Int {
+            fn run() -> int {
                 return bar();
             }
         )",
@@ -190,7 +210,7 @@ void test_runtime_error_includes_stack_trace() {
     } catch (const zephyr::ZephyrRuntimeError& error) {
         rejected = true;
         const std::string message = error.what();
-        require(message.find("function 'foo' argument 1 for parameter 'value' expects 'Int', got 'String'") != std::string::npos,
+        require(message.find("function 'foo' argument 1 for parameter 'value' expects 'int', got 'string'") != std::string::npos,
                 "runtime type error should explain expected and actual types");
         require(error.stack_trace.find("at foo (unit_runtime_stack:2:") != std::string::npos,
                 "stack trace should include foo");
@@ -207,12 +227,12 @@ void test_runtime_trait_method_not_found_includes_hint() {
     vm.execute_string(
         R"(
             trait Greet {
-                fn greet(self) -> String;
+                fn greet(self) -> string;
             }
 
-            struct Dog { name: String }
+            struct Dog { name: string }
 
-            fn run() -> String {
+            fn run() -> string {
                 let dog = Dog { name: "Pixel" };
                 return dog.greet();
             }
@@ -279,7 +299,7 @@ void test_serialization_requires_stable_handles() {
 
     vm.execute_string(
         R"(
-            struct SaveData { score: Int, target: HostObject }
+            struct SaveData { score: int, target: HostObject }
 
             fn make_save(target: HostObject) -> SaveData {
                 return SaveData { score: 99, target: target };
@@ -350,15 +370,14 @@ void test_closure_cell_capture_survives_outer_return_and_gc() {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn drive() -> Int {
+            fn drive() -> int {
                 let counter = (fn() {
-                    let mut current: Int = 1;
-                    return fn(step: Int) -> Int {
+                    let mut current: int = 1;
+                    return fn(step: int) -> int {
                         current = current + step;
                         return current;
                     };
@@ -393,9 +412,9 @@ void test_lightweight_coroutine_skips_local_binding_cache() {
 
     vm.execute_string(
         R"(
-            fn make_counter(limit: Int) -> Coroutine {
-                return coroutine fn() -> Int {
-                    let mut i: Int = 0;
+            fn make_counter(limit: int) -> Coroutine {
+                return coroutine fn() -> int {
+                    let mut i: int = 0;
                     while i < limit {
                         yield i;
                         i = i + 1;
@@ -428,14 +447,14 @@ void test_coroutine_resume_and_done() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn drive() -> Int {
-                let worker = coroutine fn() -> Int {
+            fn drive() -> int {
+                let worker = coroutine fn() -> int {
                     yield 1;
                     yield 2;
                     return 3;
                 };
 
-                let mut total: Int = 0;
+                let mut total: int = 0;
                 if worker.done {
                     return -1;
                 }
@@ -475,26 +494,23 @@ void test_coroutine_is_lazy_and_preserves_state_across_gc() {
             ++bumps;
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
     vm.register_global_function(
         "bump_count",
         [&bumps](const std::vector<zephyr::ZephyrValue>&) { return zephyr::ZephyrValue(bumps); },
-        {},
-        "Int");
+        {}, "int");
     vm.register_global_function(
         "force_gc",
         [&vm](const std::vector<zephyr::ZephyrValue>&) {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn drive() -> Int {
-                let worker = coroutine fn() -> Int {
+            fn drive() -> int {
+                let worker = coroutine fn() -> int {
                     bump();
                     let values = [7, 11, 13];
                     yield values[0];
@@ -536,13 +552,13 @@ void test_nested_script_function_yield_inside_coroutine() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn helper(seed: Int) -> Int {
+            fn helper(seed: int) -> int {
                 yield seed + 1;
                 return seed + 2;
             }
 
-            fn drive() -> Int {
-                let worker = coroutine fn() -> Int {
+            fn drive() -> int {
+                let worker = coroutine fn() -> int {
                     let final = helper(10);
                     return final + 100;
                 };
@@ -577,28 +593,27 @@ void test_deeply_nested_script_function_yield_survives_gc() {
             vm.collect_garbage();
             return zephyr::ZephyrValue();
         },
-        {},
-        "Nil");
+        {}, "Nil");
 
     vm.execute_string(
         R"(
-            fn leaf(seed: Int) -> Int {
+            fn leaf(seed: int) -> int {
                 yield seed + 1;
                 return seed + 2;
             }
 
-            fn middle(seed: Int) -> Int {
+            fn middle(seed: int) -> int {
                 let inner = leaf(seed + 10);
                 return inner + 20;
             }
 
-            fn outer(seed: Int) -> Int {
+            fn outer(seed: int) -> int {
                 let value = middle(seed);
                 return value + 100;
             }
 
-            fn drive() -> Int {
-                let worker = coroutine fn() -> Int {
+            fn drive() -> int {
+                let worker = coroutine fn() -> int {
                     return outer(1);
                 };
 
@@ -630,20 +645,20 @@ void test_coroutine_runtime_stats_and_dump() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn leaf(seed: Int) -> Int {
+            fn leaf(seed: int) -> int {
                 yield seed + 1;
                 return seed + 2;
             }
 
-            fn middle(seed: Int) -> Int {
+            fn middle(seed: int) -> int {
                 return leaf(seed + 10) + 20;
             }
 
-            let worker = coroutine fn() -> Int {
+            let worker = coroutine fn() -> int {
                 return middle(1) + 100;
             };
 
-            fn step() -> Int {
+            fn step() -> int {
                 return resume worker;
             }
         )",
@@ -699,7 +714,7 @@ void test_yield_outside_coroutine_rejected() {
     zephyr::ZephyrVM vm;
     vm.execute_string(
         R"(
-            fn bad() -> Int {
+            fn bad() -> int {
                 yield 1;
                 return 0;
             }
@@ -743,7 +758,7 @@ void test_coroutine_rejects_frame_handle_yield() {
     vm.execute_string(
         R"(
             fn bad_worker() -> Coroutine {
-                return coroutine fn() -> Int {
+                return coroutine fn() -> int {
                     yield make_frame_counter();
                     return 0;
                 };
@@ -773,8 +788,8 @@ void test_v2_coroutine_handles_young_gc_and_deserialize() {
 
     vm.execute_string(
         R"(
-            fn make_counter(limit: Int) -> Coroutine {
-                return coroutine fn() -> Int {
+            fn make_counter(limit: int) -> Coroutine {
+                return coroutine fn() -> int {
                     let mut i = 0;
                     while i < limit {
                         yield i;
@@ -828,12 +843,12 @@ void test_wave_a_coroutine_set_unordered() {
     vm.install_core();
 
     vm.execute_string(R"(
-        fn drive() -> Int {
-            let c0 = coroutine fn() -> Int { yield 10; return 11; };
-            let c1 = coroutine fn() -> Int { yield 20; return 21; };
-            let c2 = coroutine fn() -> Int { yield 30; return 31; };
-            let c3 = coroutine fn() -> Int { yield 40; return 41; };
-            let c4 = coroutine fn() -> Int { yield 50; return 51; };
+        fn drive() -> int {
+            let c0 = coroutine fn() -> int { yield 10; return 11; };
+            let c1 = coroutine fn() -> int { yield 20; return 21; };
+            let c2 = coroutine fn() -> int { yield 30; return 31; };
+            let c3 = coroutine fn() -> int { yield 40; return 41; };
+            let c4 = coroutine fn() -> int { yield 50; return 51; };
 
             // First resume: all 5 coroutines suspended simultaneously
             let a = resume c0;

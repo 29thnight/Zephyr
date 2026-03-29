@@ -1,5 +1,5 @@
-fn sum_all(values: Array) -> Int {
-    let mut total: Int = 0;
+fn sum_all(values: Array) -> int {
+    let mut total: int = 0;
     for item in values {
         total = total + item;
     }

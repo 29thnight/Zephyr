@@ -5396,7 +5396,7 @@ private:
             compile_expr(for_stmt->iterable.get());
             emit_define_symbol(iter_name, for_stmt->span);
             emit_constant(BytecodeConstant{static_cast<std::int64_t>(0)}, for_stmt->span);
-            emit_define_symbol(index_name, for_stmt->span, std::string("Int"), true);
+            emit_define_symbol(index_name, for_stmt->span, std::string("int"), true);
 
             const int loop_start = static_cast<int>(function_->instructions.size());
             loop_stack_.push_back(LoopContext{for_stmt->label, local_scopes_.size(), -1});

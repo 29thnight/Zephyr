@@ -1,5 +1,5 @@
-fn countdown(start: Int) -> Int {
-    let mut current: Int = start;
+fn countdown(start: int) -> int {
+    let mut current: int = start;
     while current > 0 {
         current = current - 1;
     }
