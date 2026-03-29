@@ -3106,7 +3106,7 @@ private:
     };
 
     std::shared_ptr<BytecodeFunction> compile_bytecode_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body, const std::vector<std::string>& generic_params = {});
-    std::shared_ptr<BytecodeFunction> compile_module_bytecode(const std::string& name, Program* program);
+    RuntimeResult<std::shared_ptr<BytecodeFunction>> compile_module_bytecode(const std::string& name, Program* program);
     RuntimeResult<Value> execute_bytecode_chunk(const BytecodeFunction& chunk, const std::vector<Param>& params, Environment* call_env,
                                                 ModuleRecord& module, const Span& call_span,
                                                 const std::vector<UpvalueCellObject*>* captured_upvalues = nullptr,
@@ -4007,14 +4007,81 @@ public:
         return compile_stack_function(name, params, body, is_coroutine_body, generic_params);
     }
 
-    std::shared_ptr<BytecodeFunction> compile_module(const std::string& name, Program* program) {
+    static bool is_top_level_declaration(Stmt* stmt) {
+        return dynamic_cast<FunctionDecl*>(stmt) != nullptr
+            || dynamic_cast<StructDecl*>(stmt)   != nullptr
+            || dynamic_cast<EnumDecl*>(stmt)     != nullptr
+            || dynamic_cast<TraitDecl*>(stmt)    != nullptr
+            || dynamic_cast<ImplDecl*>(stmt)     != nullptr;
+    }
+
+    // Returns error if any impl block is missing required trait methods.
+    // Call this before compile_module's Pass 1.
+    VoidResult check_trait_impls(Program* program, const std::string& module_name) {
+        // Step A: collect all trait declarations → map from trait_name → list of required method names
+        std::unordered_map<std::string, std::vector<std::string>> trait_methods;
+        for (auto& stmt : program->statements) {
+            if (auto* trait_decl = dynamic_cast<TraitDecl*>(stmt.get())) {
+                std::vector<std::string> methods;
+                for (auto& method : trait_decl->methods) {
+                    methods.push_back(method.name);
+                }
+                trait_methods[trait_decl->name] = std::move(methods);
+            }
+        }
+
+        // Step B: for each impl block, verify all required methods are provided
+        for (auto& stmt : program->statements) {
+            if (auto* impl_decl = dynamic_cast<ImplDecl*>(stmt.get())) {
+                const std::string trait_name = impl_decl->trait_name.display_name();
+                auto it = trait_methods.find(trait_name);
+                if (it == trait_methods.end()) continue;  // trait not in this module, skip
+
+                // Collect method names provided by this impl
+                std::unordered_set<std::string> provided;
+                for (auto& method : impl_decl->methods) {
+                    provided.insert(method->name);
+                }
+
+                // Check each required method is provided
+                for (const auto& required : it->second) {
+                    if (provided.find(required) == provided.end()) {
+                        const std::string type_name = impl_decl->for_type.display_name();
+                        return make_loc_error<std::monostate>(
+                            module_name, impl_decl->span,
+                            "impl of trait '" + trait_name + "' for '" + type_name +
+                            "' is missing required method '" + required + "'"
+                        );
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
+    RuntimeResult<std::shared_ptr<BytecodeFunction>> compile_module(const std::string& name, Program* program) {
+        ZEPHYR_TRY(check_trait_impls(program, name));
+
         reset_function_state(name);
         function_->global_slots_use_module_root_base = false;
         use_local_slots_ = false;
         allow_return_ = false;
+
+        // Pass 1: hoist all top-level declarations (fn, struct, enum, trait, impl)
+        // This enables forward references and mutual recursion at module level.
         for (auto& statement : program->statements) {
-            compile_stmt(statement.get());
+            if (is_top_level_declaration(statement.get())) {
+                compile_stmt(statement.get());
+            }
         }
+
+        // Pass 2: compile all non-declaration statements in source order
+        for (auto& statement : program->statements) {
+            if (!is_top_level_declaration(statement.get())) {
+                compile_stmt(statement.get());
+            }
+        }
+
         emit_constant(BytecodeConstant{std::monostate{}}, Span{});
         emit(BytecodeOp::Return, Span{});
         function_->local_count = 0;

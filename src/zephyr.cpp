@@ -16,7 +16,7 @@ std::shared_ptr<BytecodeFunction> Runtime::compile_bytecode_function(const std::
     return compiler.compile(name, params, body, false, generic_params);
 }
 
-std::shared_ptr<BytecodeFunction> Runtime::compile_module_bytecode(const std::string& name, Program* program) {
+RuntimeResult<std::shared_ptr<BytecodeFunction>> Runtime::compile_module_bytecode(const std::string& name, Program* program) {
     BytecodeCompiler compiler;
     return compiler.compile_module(name, program);
 }

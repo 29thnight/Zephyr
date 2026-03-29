@@ -219,5 +219,8 @@ void test_re_export();
 void test_circular_import_error();
 void test_std_math();
 void test_std_string();
+void test_forward_reference();
+void test_mutual_recursion();
+void test_trait_impl_missing_method();
 
 }  // namespace zephyr_tests

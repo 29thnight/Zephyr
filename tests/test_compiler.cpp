@@ -1483,4 +1483,73 @@ void test_std_string() {
     }
 }
 
+void test_forward_reference() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn main() -> string {
+                return greet("world");
+            }
+            fn greet(name: string) -> string {
+                return "hello " + name;
+            }
+        )",
+        "unit_fwd_ref",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_fwd_ref", "main");
+    require(handle.has_value(), "forward_reference: missing main handle");
+    const auto result = vm.call(*handle);
+    require(result.is_string() && result.as_string() == "hello world",
+            "forward_reference: unexpected result");
+}
+
+void test_mutual_recursion() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn is_even(n: int) -> bool {
+                if n == 0 { return true; }
+                return is_odd(n - 1);
+            }
+            fn is_odd(n: int) -> bool {
+                if n == 0 { return false; }
+                return is_even(n - 1);
+            }
+        )",
+        "unit_mutual_rec",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_mutual_rec", "is_even");
+    require(handle.has_value(), "mutual_recursion: missing is_even handle");
+    const auto result = vm.call(*handle, {zephyr::ZephyrValue(4)});
+    require(result.is_bool() && result.as_bool(), "mutual_recursion: is_even(4) should be true");
+}
+
+void test_trait_impl_missing_method() {
+    zephyr::ZephyrVM vm;
+    bool rejected = false;
+    try {
+        vm.execute_string(
+            R"(
+                trait Greeter {
+                    fn greet(self) -> string;
+                    fn farewell(self) -> string;
+                }
+                struct Bot { name: string }
+                impl Greeter for Bot {
+                    fn greet(self) -> string { return "hi"; }
+                }
+            )",
+            "unit_trait_missing",
+            std::filesystem::current_path());
+    } catch (const std::exception& error) {
+        rejected = true;
+        const std::string message = error.what();
+        require(message.find("farewell") != std::string::npos,
+                "trait impl check should mention missing method 'farewell'");
+    }
+    require(rejected, "execute_string should reject impls with missing trait methods");
+}
+
 }  // namespace zephyr_tests

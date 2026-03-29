@@ -6529,7 +6529,8 @@ RuntimeResult<Value> Runtime::run_program(ModuleRecord& module) {
         if (module.program == nullptr) {
             return make_error<Value>("Module '" + module.name + "' is missing both AST and bytecode.");
         }
-        module.bytecode = compile_module_bytecode(module.name, module.program.get());
+        ZEPHYR_TRY_ASSIGN(compiled_bytecode, compile_module_bytecode(module.name, module.program.get()));
+        module.bytecode = std::move(compiled_bytecode);
         if (bytecode_cache_enabled_ && !module.path.empty() && module.bytecode != nullptr) {
             bytecode_cache_[module.name] =
                 BytecodeCacheEntry{module.path.string(), module.file_mtime,

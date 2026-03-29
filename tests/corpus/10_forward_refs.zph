@@ -1,0 +1,29 @@
+// 10_forward_refs.zph — Forward reference and mutual recursion test
+
+fn run_all() {
+    assert(greet("Zephyr") == "hello Zephyr");
+    assert(is_even(6) == true);
+    assert(is_odd(7) == true);
+    assert(fib(10) == 55);
+}
+
+fn greet(name: string) -> string {
+    return "hello " + name;
+}
+
+fn is_even(n: int) -> bool {
+    if n == 0 { return true; }
+    return is_odd(n - 1);
+}
+
+fn is_odd(n: int) -> bool {
+    if n == 0 { return false; }
+    return is_even(n - 1);
+}
+
+fn fib(n: int) -> int {
+    if n <= 1 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+run_all();

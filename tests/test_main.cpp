@@ -98,6 +98,9 @@ int main() {
         test_circular_import_error();
         test_std_math();
         test_std_string();
+        test_forward_reference();
+        test_mutual_recursion();
+        test_trait_impl_missing_method();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {
