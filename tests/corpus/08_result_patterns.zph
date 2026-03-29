@@ -1,0 +1,44 @@
+fn safe_div(a: Int, b: Int) {
+    if b == 0 { return Err("zero"); }
+    return Ok(a - b);
+}
+
+fn compute(x: Int, y: Int) {
+    let q = safe_div(x, y)?;
+    return Ok(q + 2);
+}
+
+struct Vec2 { x: Int, y: Int }
+
+fn classify(v: Vec2) {
+    return match v {
+        Vec2 { x: 0, y: 0 } => "origin",
+        Vec2 { x: 0, y }    => "y-axis",
+        Vec2 { x, y: 0 }    => "x-axis",
+        Vec2 { x, y }       => "general",
+    };
+}
+
+fn head_tail(arr) {
+    return match arr {
+        []             => "empty",
+        [x]            => "one",
+        [a, b, ..rest] => "many",
+    };
+}
+
+fn main() {
+    let r1 = compute(10, 2);
+    let v1 = match r1 { Ok(v) => v, Err(_) => -1 };
+    print(v1);
+
+    let r2 = compute(5, 0);
+    let v2 = match r2 { Ok(v) => v, Err(_) => -1 };
+    print(v2);
+
+    let p = Vec2 { x: 3, y: 0 };
+    print(classify(p));
+
+    let arr = [10, 20, 30];
+    print(head_tail(arr));
+}

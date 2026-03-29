@@ -88,6 +88,11 @@ int main() {
         test_generic_function_execution();
         test_generic_struct_instantiation();
         test_generic_multi_param_function();
+        test_wave_l_result_ok_err();
+        test_wave_l_result_question_op();
+        test_wave_l_array_pattern();
+        test_wave_l_struct_pattern();
+        test_wave_l_nested_pattern();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

@@ -728,6 +728,12 @@ RuntimeResult<ExprPtr> Parser::parse_call() {
             index->index = std::move(index_expr);
             ZEPHYR_TRY(consume(TokenType::RightBracket, "Expected ']' after index expression."));
             expr = std::move(index);
+        } else if (match({TokenType::Question})) {
+            auto unary = std::make_unique<UnaryExpr>();
+            unary->span = previous().span;
+            unary->op = TokenType::Question;
+            unary->right = std::move(expr);
+            expr = std::move(unary);
         } else {
             break;
         }
@@ -887,6 +893,28 @@ RuntimeResult<ExprPtr> Parser::parse_identifier_led_expression() {
         return expr;
     }
 
+    // Shorthand enum constructor: Ok(v) / Err(e) — single uppercase identifier followed by '('
+    if (type_like && path.parts.size() == 1 && check(TokenType::LeftParen)) {
+        advance();  // consume '('
+        auto expr = std::make_unique<EnumInitExpr>();
+        expr->span = start;
+        expr->variant_name = path.parts.front();
+        TypeRef inferred_enum;
+        inferred_enum.span = start;
+        const std::string& variant = path.parts.front();
+        inferred_enum.parts.push_back(
+            (variant == "Ok" || variant == "Err") ? "Result" : variant);
+        expr->enum_name = inferred_enum;
+        if (!check(TokenType::RightParen)) {
+            do {
+                ZEPHYR_TRY_ASSIGN(argument, parse_expression());
+                expr->arguments.push_back(std::move(argument));
+            } while (match({TokenType::Comma}));
+        }
+        ZEPHYR_TRY(consume(TokenType::RightParen, "Expected ')' after enum constructor arguments."));
+        return expr;
+    }
+
     if (path.parts.size() >= 2) {
         auto expr = std::make_unique<EnumInitExpr>();
         expr->span = start;
@@ -988,10 +1016,93 @@ RuntimeResult<PatternPtr> Parser::parse_pattern_primary() {
             return pattern;
         }
 
+        // Struct field destructuring: Point { x: 0, y } — uppercase identifier followed by '{'
+        const bool type_like = !path.parts.front().empty() &&
+                               std::isupper(static_cast<unsigned char>(path.parts.front().front()));
+        if (type_like && check(TokenType::LeftBrace)) {
+            advance();  // consume '{'
+            auto struct_pat = std::make_unique<StructPattern>();
+            struct_pat->span = token.span;
+            struct_pat->type_name = path;
+            while (!check(TokenType::RightBrace) && !is_at_end()) {
+                if (check(TokenType::DotDot)) {
+                    advance();
+                    break;
+                }
+                StructFieldPattern field;
+                field.span = peek().span;
+                ZEPHYR_TRY_ASSIGN(field_id, consume(TokenType::Identifier, "Expected field name in struct pattern."));
+                field.name = field_id.lexeme;
+                if (match({TokenType::Colon})) {
+                    ZEPHYR_TRY_ASSIGN(sub_pattern, parse_pattern());
+                    field.pattern = std::move(sub_pattern);
+                } else {
+                    auto binding = std::make_unique<BindingPattern>();
+                    binding->span = field.span;
+                    binding->name = field.name;
+                    field.pattern = std::move(binding);
+                }
+                struct_pat->fields.push_back(std::move(field));
+                if (!check(TokenType::RightBrace)) {
+                    ZEPHYR_TRY(consume(TokenType::Comma, "Expected ',' in struct pattern."));
+                }
+            }
+            ZEPHYR_TRY(consume(TokenType::RightBrace, "Expected '}' to close struct pattern."));
+            return struct_pat;
+        }
+
+        // Shorthand enum pattern: Ok(x) / Err(e) — single uppercase identifier followed by '('
+        if (type_like && check(TokenType::LeftParen)) {
+            advance();  // consume '('
+            auto pattern = std::make_unique<EnumPattern>();
+            pattern->span = token.span;
+            pattern->variant_name = path.parts.front();
+            TypeRef inferred_enum;
+            inferred_enum.span = token.span;
+            const std::string& variant = path.parts.front();
+            inferred_enum.parts.push_back(
+                (variant == "Ok" || variant == "Err") ? "Result" : variant);
+            pattern->enum_name = inferred_enum;
+            if (!check(TokenType::RightParen)) {
+                do {
+                    ZEPHYR_TRY_ASSIGN(payload_pattern, parse_pattern());
+                    pattern->payload.push_back(std::move(payload_pattern));
+                } while (match({TokenType::Comma}));
+            }
+            ZEPHYR_TRY(consume(TokenType::RightParen, "Expected ')' after enum pattern payload."));
+            return pattern;
+        }
+
         auto binding = std::make_unique<BindingPattern>();
         binding->span = token.span;
         binding->name = token.lexeme;
         return binding;
+    }
+
+    // Array pattern: [a, b, ..rest]
+    if (check(TokenType::LeftBracket)) {
+        advance();  // consume '['
+        const Span arr_span = previous().span;
+        auto array_pat = std::make_unique<ArrayPattern>();
+        array_pat->span = arr_span;
+        while (!check(TokenType::RightBracket) && !is_at_end()) {
+            if (check(TokenType::DotDot)) {
+                advance();  // consume '..'
+                array_pat->has_rest = true;
+                if (check(TokenType::Identifier)) {
+                    array_pat->rest_name = peek().lexeme;
+                    advance();
+                }
+                break;
+            }
+            ZEPHYR_TRY_ASSIGN(elem_pat, parse_pattern());
+            array_pat->elements.push_back(std::move(elem_pat));
+            if (!check(TokenType::RightBracket)) {
+                ZEPHYR_TRY(consume(TokenType::Comma, "Expected ',' in array pattern."));
+            }
+        }
+        ZEPHYR_TRY(consume(TokenType::RightBracket, "Expected ']' to close array pattern."));
+        return array_pat;
     }
 
     if (match({TokenType::Integer})) {

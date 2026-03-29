@@ -2029,9 +2029,11 @@ RuntimeResult<bool> Runtime::is_enum_variant_value(const Value& value, const std
         return false;
     }
     auto* instance = static_cast<EnumInstanceObject*>(value.as_object());
-    const std::string expected_name = parse_type_name(enum_name, span).parts.back();
-    if (instance->type->name != expected_name) {
-        return false;
+    if (!enum_name.empty()) {
+        const std::string expected_name = parse_type_name(enum_name, span).parts.back();
+        if (instance->type->name != expected_name) {
+            return false;
+        }
     }
     if (instance->variant != variant_name) {
         return false;
@@ -8194,9 +8196,11 @@ RuntimeResult<bool> Runtime::bind_pattern(Environment* target_env, const Value& 
             return false;
         }
         auto* enum_value = static_cast<EnumInstanceObject*>(value.as_object());
-        const std::string expected_enum = enum_pattern->enum_name.parts.back();
-        if (enum_value->type->name != expected_enum) {
-            return false;
+        if (!enum_pattern->enum_name.parts.empty()) {
+            const std::string expected_enum = enum_pattern->enum_name.parts.back();
+            if (enum_value->type->name != expected_enum) {
+                return false;
+            }
         }
         if (enum_value->variant != enum_pattern->variant_name || enum_value->payload.size() != enum_pattern->payload.size()) {
             return false;
@@ -9124,6 +9128,20 @@ void Runtime::install_core() {
         },
         {"Int", "Int"},
         "Array");
+
+    // Built-in Result enum with Ok and Err variants
+    {
+        auto* result_type = allocate<EnumTypeObject>("Result");
+        EnumVariantSpec ok_spec;
+        ok_spec.name = "Ok";
+        ok_spec.payload_types.push_back("");
+        result_type->variants.push_back(ok_spec);
+        EnumVariantSpec err_spec;
+        err_spec.name = "Err";
+        err_spec.payload_types.push_back("");
+        result_type->variants.push_back(err_spec);
+        define_value(root_environment_, "Result", Value::object(result_type), false);
+    }
 }
 
 void Runtime::mark_roots() {

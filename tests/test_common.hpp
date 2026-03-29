@@ -209,5 +209,10 @@ void test_generic_struct_parsing();
 void test_generic_function_execution();
 void test_generic_struct_instantiation();
 void test_generic_multi_param_function();
+void test_wave_l_result_ok_err();
+void test_wave_l_result_question_op();
+void test_wave_l_array_pattern();
+void test_wave_l_struct_pattern();
+void test_wave_l_nested_pattern();
 
 }  // namespace zephyr_tests

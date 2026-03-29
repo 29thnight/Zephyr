@@ -1139,4 +1139,194 @@ void test_generic_multi_param_function() {
             "generic multi-param function: first<int,string>(99, ignored) should be 99");
 }
 
+void test_wave_l_result_ok_err() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            export fn run_ok() -> Int {
+                let r = Ok(42);
+                return match r {
+                    Ok(v)  => v,
+                    Err(_) => 0,
+                };
+            }
+            export fn run_err() -> Int {
+                let r = Err("oops");
+                return match r {
+                    Ok(v)  => v,
+                    Err(_) => -1,
+                };
+            }
+        )",
+        "unit_wave_l_result",
+        std::filesystem::current_path());
+
+    const auto ok_h = vm.get_function("unit_wave_l_result", "run_ok");
+    require(ok_h.has_value(), "wave_l_result: missing run_ok handle");
+    const auto ok_r = vm.call(*ok_h);
+    require(ok_r.is_int() && ok_r.as_int() == 42, "wave_l_result: Ok(42) match should yield 42");
+
+    const auto err_h = vm.get_function("unit_wave_l_result", "run_err");
+    require(err_h.has_value(), "wave_l_result: missing run_err handle");
+    const auto err_r = vm.call(*err_h);
+    require(err_r.is_int() && err_r.as_int() == -1, "wave_l_result: Err case should yield -1");
+}
+
+void test_wave_l_result_question_op() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn safe_dec(a: Int) {
+                if a == 0 { return Err("zero"); }
+                return Ok(a - 1);
+            }
+            fn compute(a: Int) {
+                let x = safe_dec(a)?;
+                return Ok(x + 10);
+            }
+            export fn ok_case() -> Int {
+                let r = compute(5);
+                return match r {
+                    Ok(v)  => v,
+                    Err(_) => -1,
+                };
+            }
+            export fn err_case() -> Int {
+                let r = compute(0);
+                return match r {
+                    Ok(v)  => v,
+                    Err(_) => -1,
+                };
+            }
+        )",
+        "unit_wave_l_question",
+        std::filesystem::current_path());
+
+    const auto ok_h = vm.get_function("unit_wave_l_question", "ok_case");
+    require(ok_h.has_value(), "wave_l_question: missing ok_case handle");
+    const auto ok_r = vm.call(*ok_h);
+    require(ok_r.is_int() && ok_r.as_int() == 14, "wave_l_question: dec(5)=4, +10=14");
+
+    const auto err_h = vm.get_function("unit_wave_l_question", "err_case");
+    require(err_h.has_value(), "wave_l_question: missing err_case handle");
+    const auto err_r = vm.call(*err_h);
+    require(err_r.is_int() && err_r.as_int() == -1, "wave_l_question: zero input should propagate Err");
+}
+
+void test_wave_l_array_pattern() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            export fn describe_empty() -> Int {
+                let arr = [];
+                return match arr {
+                    []             => 0,
+                    [x]            => 1,
+                    [a, b, ..rest] => 2,
+                };
+            }
+            export fn describe_one() -> Int {
+                let arr = [99];
+                return match arr {
+                    []             => 0,
+                    [x]            => x,
+                    [a, b, ..rest] => 2,
+                };
+            }
+            export fn describe_many() -> Int {
+                let arr = [10, 20, 30, 40];
+                return match arr {
+                    []             => 0,
+                    [x]            => x,
+                    [a, b, ..rest] => a + b,
+                };
+            }
+        )",
+        "unit_wave_l_array",
+        std::filesystem::current_path());
+
+    const auto empty_h = vm.get_function("unit_wave_l_array", "describe_empty");
+    require(empty_h.has_value(), "wave_l_array: missing describe_empty handle");
+    const auto empty_r = vm.call(*empty_h);
+    require(empty_r.is_int() && empty_r.as_int() == 0, "wave_l_array: empty array pattern");
+
+    const auto one_h = vm.get_function("unit_wave_l_array", "describe_one");
+    require(one_h.has_value(), "wave_l_array: missing describe_one handle");
+    const auto one_r = vm.call(*one_h);
+    require(one_r.is_int() && one_r.as_int() == 99, "wave_l_array: single element array pattern");
+
+    const auto many_h = vm.get_function("unit_wave_l_array", "describe_many");
+    require(many_h.has_value(), "wave_l_array: missing describe_many handle");
+    const auto many_r = vm.call(*many_h);
+    require(many_r.is_int() && many_r.as_int() == 30, "wave_l_array: many elements: first+second");
+}
+
+void test_wave_l_struct_pattern() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            struct Point { x: Int, y: Int }
+            export fn classify_origin() -> Int {
+                let p = Point { x: 0, y: 0 };
+                return match p {
+                    Point { x: 0, y: 0 } => 0,
+                    Point { x, y }       => x + y,
+                };
+            }
+            export fn classify_general() -> Int {
+                let p = Point { x: 3, y: 4 };
+                return match p {
+                    Point { x: 0, y } => y,
+                    Point { x, y }    => x + y,
+                };
+            }
+        )",
+        "unit_wave_l_struct",
+        std::filesystem::current_path());
+
+    const auto origin_h = vm.get_function("unit_wave_l_struct", "classify_origin");
+    require(origin_h.has_value(), "wave_l_struct: missing classify_origin handle");
+    const auto origin_r = vm.call(*origin_h);
+    require(origin_r.is_int() && origin_r.as_int() == 0, "wave_l_struct: Point{0,0} should match origin case");
+
+    const auto gen_h = vm.get_function("unit_wave_l_struct", "classify_general");
+    require(gen_h.has_value(), "wave_l_struct: missing classify_general handle");
+    const auto gen_r = vm.call(*gen_h);
+    require(gen_r.is_int() && gen_r.as_int() == 7, "wave_l_struct: Point{3,4} should give 3+4=7");
+}
+
+void test_wave_l_nested_pattern() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            struct Point { x: Int, y: Int }
+            export fn nested_ok() -> Int {
+                let r = Ok(Point { x: 1, y: 2 });
+                return match r {
+                    Ok(Point { x, y }) => x + y,
+                    Err(_)             => -1,
+                };
+            }
+            export fn nested_err() -> Int {
+                let r = Err("bad");
+                return match r {
+                    Ok(Point { x, y }) => x + y,
+                    Err(_)             => -1,
+                };
+            }
+        )",
+        "unit_wave_l_nested",
+        std::filesystem::current_path());
+
+    const auto ok_h = vm.get_function("unit_wave_l_nested", "nested_ok");
+    require(ok_h.has_value(), "wave_l_nested: missing nested_ok handle");
+    const auto ok_r = vm.call(*ok_h);
+    require(ok_r.is_int() && ok_r.as_int() == 3, "wave_l_nested: Ok(Point{1,2}) should give 1+2=3");
+
+    const auto err_h = vm.get_function("unit_wave_l_nested", "nested_err");
+    require(err_h.has_value(), "wave_l_nested: missing nested_err handle");
+    const auto err_r = vm.call(*err_h);
+    require(err_r.is_int() && err_r.as_int() == -1, "wave_l_nested: Err should give -1");
+}
+
 }  // namespace zephyr_tests
