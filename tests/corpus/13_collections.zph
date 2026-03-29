@@ -1,0 +1,41 @@
+import { HashMap, Set, Queue, range, map_array } from "std/collections";
+
+fn test_hashmap() {
+    let m = HashMap::new();
+    m.set("x", 42);
+    m.set("y", 99);
+    assert(m.get("x") == 42);
+    assert(m.has("y") == true);
+    assert(m.size() == 2);
+    m.delete("x");
+    assert(m.size() == 1);
+}
+
+fn test_set() {
+    let s = Set::new();
+    s.add(1); s.add(2); s.add(1);
+    assert(s.size() == 2);
+    assert(s.has(1) == true);
+    assert(s.has(3) == false);
+}
+
+fn test_queue() {
+    let q = Queue::new();
+    q.push("a"); q.push("b");
+    assert(q.pop() == "a");
+    assert(q.size() == 1);
+    assert(q.is_empty() == false);
+}
+
+fn test_range_map() {
+    let r = range(0, 3);
+    assert(r[0] == 0);
+    assert(r[2] == 2);
+}
+
+fn main() {
+    test_hashmap();
+    test_set();
+    test_queue();
+    test_range_map();
+}

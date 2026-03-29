@@ -220,6 +220,15 @@ void ModuleNamespaceObject::trace(Runtime& runtime) {
     runtime.mark_object(environment);
 }
 
+void StructTypeObject::trace(Runtime& runtime) {
+    for (auto& [name, val] : static_methods) {
+        runtime.mark_value(val);
+    }
+    for (auto& [name, val] : instance_methods) {
+        runtime.mark_value(val);
+    }
+}
+
 Runtime::Runtime(ZephyrVMConfig config) : config_(std::move(config)) {
     // Phase 6: four-space heap. LegacyHeapSpace removed (was empty after Phase 5B).
     all_spaces_ = {&los_, &pinned_, &old_small_, &nursery_};
@@ -2117,6 +2126,15 @@ RuntimeResult<Value> Runtime::get_member_value(const Value& object, const std::s
             }
             return make_loc_error<Value>(module_name, span, "Unknown coroutine member '" + member + "'.");
         }
+        case ObjectKind::StructType: {
+            auto* struct_type = static_cast<StructTypeObject*>(raw);
+            const auto it = struct_type->static_methods.find(member);
+            if (it != struct_type->static_methods.end()) {
+                return it->second;
+            }
+            return make_loc_error<Value>(module_name, span,
+                                         "No static method '" + member + "' on type '" + struct_type->name + "'.");
+        }
         default:
             return make_loc_error<Value>(module_name, span, "Unsupported member access receiver.");
     }
@@ -2259,6 +2277,17 @@ RuntimeResult<Value> Runtime::call_member_value(const Value& object, const std::
         const std::size_t slot = instance->field_slot(member);
         if (slot != static_cast<std::size_t>(-1)) {
             return call_value(instance->field_values[slot], args, span, module_name);
+        }
+        // Check freestanding impl instance methods
+        if (instance->type != nullptr) {
+            const auto im_it = instance->type->instance_methods.find(member);
+            if (im_it != instance->type->instance_methods.end()) {
+                std::vector<Value> dispatch_args;
+                dispatch_args.reserve(args.size() + 1);
+                dispatch_args.push_back(object);
+                dispatch_args.insert(dispatch_args.end(), args.begin(), args.end());
+                return call_value(im_it->second, dispatch_args, span, module_name);
+            }
         }
         ZEPHYR_TRY_ASSIGN(trait_method, resolve_trait_method(object, member, span, module_name));
         if (trait_method.has_value()) {
@@ -8411,6 +8440,42 @@ VoidResult Runtime::register_trait_decl(Environment* environment, TraitDecl* tra
 
 VoidResult Runtime::register_impl_decl(Environment* environment, ImplDecl* impl_decl, ModuleRecord& module) {
     if (impl_decl == nullptr) {
+        return ok_result();
+    }
+
+    // Freestanding impl: impl TypeName { ... } — for_type.parts is empty
+    if (impl_decl->for_type.parts.empty()) {
+        const std::string struct_name = impl_decl->trait_name.display_name();
+        ZEPHYR_TRY_ASSIGN(type_value, lookup_value(environment, struct_name, impl_decl->span, module.name));
+        if (!type_value.is_object() || type_value.as_object()->kind != ObjectKind::StructType) {
+            return make_loc_error<std::monostate>(module.name, impl_decl->span,
+                                                  "Freestanding impl target '" + struct_name + "' must be a struct type.");
+        }
+        auto* struct_type = static_cast<StructTypeObject*>(type_value.as_object());
+        for (const auto& method : impl_decl->methods) {
+            if (method == nullptr) {
+                continue;
+            }
+            const bool has_self = !method->params.empty() && method->params.front().name == "self";
+            const std::string hidden_name = "__impl_" + struct_name + "_" + method->name;
+            ZEPHYR_TRY_ASSIGN(function_object,
+                              create_script_function(hidden_name,
+                                                     module.name,
+                                                     method->params,
+                                                     method->return_type,
+                                                     method->body.get(),
+                                                     environment,
+                                                     compile_bytecode_function(hidden_name, method->params, method->body.get()),
+                                                     method->span,
+                                                     method->generic_params));
+            const Value fn_value = Value::object(function_object);
+            define_value(environment, hidden_name, fn_value, false, std::string("Function"));
+            if (has_self) {
+                struct_type->instance_methods[method->name] = fn_value;
+            } else {
+                struct_type->static_methods[method->name] = fn_value;
+            }
+        }
         return ok_result();
     }
 

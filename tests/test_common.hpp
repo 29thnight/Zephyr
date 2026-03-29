@@ -104,6 +104,7 @@ inline std::string normalize_captured_output(std::string text) {
 
 inline void run_corpus_case(const std::filesystem::path& path, const std::string& expected_output) {
     zephyr::ZephyrVM vm;
+    vm.add_module_search_path(std::filesystem::current_path().string());
     StreamCapture output(std::cout);
 
     vm.execute_file(path);
@@ -228,5 +229,8 @@ void test_where_bound_violation();
 void test_std_json_parse();
 void test_std_json_array();
 void test_std_collections_hashmap();
+void test_assoc_fn_syntax();
+void test_collections_set_method();
+void test_collections_queue_method();
 
 }  // namespace zephyr_tests

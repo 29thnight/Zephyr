@@ -20,6 +20,7 @@ void test_corpus_scripts() {
         {corpus_root / "08_result_patterns.zph", "10\n-1\nx-axis\nmany"},
         {corpus_root / "09_modules.zph", "ok"},
         {corpus_root / "12_std_json.zph", ""},
+        {corpus_root / "13_collections.zph", ""},
     };
 
     for (const auto& corpus_case : cases) {

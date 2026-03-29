@@ -107,6 +107,9 @@ int main() {
         test_std_json_parse();
         test_std_json_array();
         test_std_collections_hashmap();
+        test_assoc_fn_syntax();
+        test_collections_set_method();
+        test_collections_queue_method();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

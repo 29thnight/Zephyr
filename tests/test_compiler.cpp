@@ -1690,28 +1690,28 @@ void test_std_collections_hashmap() {
     vm.add_module_search_path(std::filesystem::current_path().string());
     vm.execute_string(
         R"(
-            import { hashmap_new, hashmap_set, hashmap_get, hashmap_has, hashmap_size, hashmap_delete } from "std/collections";
+            import { HashMap } from "std/collections";
             export fn check_size() -> bool {
-                let m = hashmap_new();
-                hashmap_set(m, "x", 10);
-                hashmap_set(m, "y", 20);
-                return hashmap_size(m) == 2;
+                let m = HashMap::new();
+                m.set("x", 10);
+                m.set("y", 20);
+                return m.size() == 2;
             }
             export fn check_get() -> bool {
-                let m = hashmap_new();
-                hashmap_set(m, "k", 99);
-                return hashmap_get(m, "k") == 99;
+                let m = HashMap::new();
+                m.set("k", 99);
+                return m.get("k") == 99;
             }
             export fn check_has() -> bool {
-                let m = hashmap_new();
-                hashmap_set(m, "a", 1);
-                return hashmap_has(m, "a") == true && hashmap_has(m, "b") == false;
+                let m = HashMap::new();
+                m.set("a", 1);
+                return m.has("a") == true && m.has("b") == false;
             }
             export fn check_delete() -> bool {
-                let m = hashmap_new();
-                hashmap_set(m, "d", 7);
-                hashmap_delete(m, "d");
-                return hashmap_size(m) == 0;
+                let m = HashMap::new();
+                m.set("d", 7);
+                m.delete("d");
+                return m.size() == 0;
             }
         )",
         "unit_std_collections_hashmap",
@@ -1724,6 +1724,73 @@ void test_std_collections_hashmap() {
         const auto result = vm.call(*h);
         require(result.is_bool() && result.as_bool(), "std_collections_hashmap: " + fn_name + " returned false");
     }
+}
+
+void test_assoc_fn_syntax() {
+    zephyr::ZephyrVM vm;
+    vm.add_module_search_path(std::filesystem::current_path().string());
+    vm.execute_string(
+        R"(
+            import { HashMap } from "std/collections";
+            export fn check_size() -> int {
+                let m = HashMap::new();
+                m.set("a", 1);
+                m.set("b", 2);
+                return m.size();
+            }
+        )",
+        "unit_assoc_fn",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_assoc_fn", "check_size");
+    require(handle.has_value(), "test_assoc_fn_syntax: missing check_size handle");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 2, "test_assoc_fn_syntax: expected 2");
+}
+
+void test_collections_set_method() {
+    zephyr::ZephyrVM vm;
+    vm.add_module_search_path(std::filesystem::current_path().string());
+    vm.execute_string(
+        R"(
+            import { Set } from "std/collections";
+            export fn check_size() -> int {
+                let s = Set::new();
+                s.add(10);
+                s.add(20);
+                s.add(10);
+                return s.size();
+            }
+        )",
+        "unit_set_method",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_set_method", "check_size");
+    require(handle.has_value(), "test_collections_set_method: missing check_size handle");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 2, "test_collections_set_method: expected 2");
+}
+
+void test_collections_queue_method() {
+    zephyr::ZephyrVM vm;
+    vm.add_module_search_path(std::filesystem::current_path().string());
+    vm.execute_string(
+        R"(
+            import { Queue } from "std/collections";
+            export fn check_first() -> string {
+                let q = Queue::new();
+                q.push("first");
+                q.push("second");
+                return q.pop();
+            }
+        )",
+        "unit_queue_method",
+        std::filesystem::current_path());
+
+    const auto handle = vm.get_function("unit_queue_method", "check_first");
+    require(handle.has_value(), "test_collections_queue_method: missing check_first handle");
+    const auto result = vm.call(*handle);
+    require(result.is_string() && result.as_string() == "first", "test_collections_queue_method: expected 'first'");
 }
 
 }  // namespace zephyr_tests

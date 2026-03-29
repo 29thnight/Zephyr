@@ -554,6 +554,12 @@ struct EnumInitExpr final : Expr {
     std::vector<ExprPtr> arguments;
 };
 
+struct AssocCallExpr final : Expr {
+    std::string type_name;   // e.g., "HashMap"
+    std::string fn_name;     // e.g., "new"
+    std::vector<ExprPtr> args;
+};
+
 struct Param {
     std::string name;
     std::optional<TypeRef> type;

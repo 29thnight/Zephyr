@@ -357,11 +357,17 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_impl_decl() {
     auto decl = std::make_unique<ImplDecl>();
     decl->span = previous().span;
     ZEPHYR_TRY(parse_generic_type_params(decl->generic_params));
-    ZEPHYR_TRY_ASSIGN(trait_name, parse_type_ref());
-    decl->trait_name = std::move(trait_name);
-    ZEPHYR_TRY(consume(TokenType::KeywordFor, "Expected 'for' in impl declaration."));
-    ZEPHYR_TRY_ASSIGN(for_type, parse_type_ref());
-    decl->for_type = std::move(for_type);
+    ZEPHYR_TRY_ASSIGN(first_type, parse_type_ref());
+    if (match({TokenType::KeywordFor})) {
+        // trait impl: impl TraitName for TypeName { ... }
+        decl->trait_name = std::move(first_type);
+        ZEPHYR_TRY_ASSIGN(for_type, parse_type_ref());
+        decl->for_type = std::move(for_type);
+    } else {
+        // freestanding impl: impl TypeName { ... }
+        // Store the type in trait_name; for_type stays empty (signals freestanding)
+        decl->trait_name = std::move(first_type);
+    }
     ZEPHYR_TRY(consume(TokenType::LeftBrace, "Expected '{' after impl target type."));
     while (!check(TokenType::RightBrace) && !is_at_end()) {
         ZEPHYR_TRY(consume(TokenType::KeywordFn, "Expected 'fn' in impl body."));
@@ -1009,6 +1015,26 @@ RuntimeResult<ExprPtr> Parser::parse_identifier_led_expression() {
     }
 
     if (path.parts.size() >= 2) {
+        const std::string& last_part = path.parts.back();
+        const bool last_is_lowercase = !last_part.empty() &&
+                                       std::islower(static_cast<unsigned char>(last_part.front()));
+        if (last_is_lowercase && check(TokenType::LeftParen)) {
+            // Associated function call: TypeName::fn_name(args)
+            advance();  // consume '('
+            auto expr = std::make_unique<AssocCallExpr>();
+            expr->span = start;
+            expr->type_name = path.parts.front();
+            expr->fn_name   = path.parts.back();
+            if (!check(TokenType::RightParen)) {
+                do {
+                    ZEPHYR_TRY_ASSIGN(arg, parse_expression());
+                    expr->args.push_back(std::move(arg));
+                } while (match({TokenType::Comma}));
+            }
+            ZEPHYR_TRY(consume(TokenType::RightParen, "Expected ')' after arguments."));
+            return expr;
+        }
+        // Enum variant: TypeName::Variant or TypeName::Variant(args)
         auto expr = std::make_unique<EnumInitExpr>();
         expr->span = start;
         expr->variant_name = path.parts.back();

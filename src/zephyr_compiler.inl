@@ -726,11 +726,13 @@ private:
 
 struct StructTypeObject final : GcObject {
     explicit StructTypeObject(std::string name) : GcObject(ObjectKind::StructType), name(std::move(name)) {}
-    void trace(class Runtime&) override {}
+    void trace(class Runtime& runtime) override;
 
     std::string name;
     std::vector<std::string> generic_params;  // e.g., {"T"} for struct Foo<T>
     std::vector<StructFieldSpec> fields;
+    std::unordered_map<std::string, Value> static_methods;    // TypeName::fn_name(args) — no self
+    std::unordered_map<std::string, Value> instance_methods;  // m.fn_name(args) — with self
 };
 
 struct StructInstanceObject final : GcObject {
@@ -1740,10 +1742,10 @@ private:
 static constexpr std::size_t kOssClassCount = 10;
 static constexpr std::size_t kOssSizeClasses[kOssClassCount] = {
      64,   // GcObject base + tiny payload
-     96,   // StringObject, ArrayObject, StructTypeObject, EnumTypeObject, ModuleNamespaceObject
+     96,   // StringObject, ArrayObject, EnumTypeObject, ModuleNamespaceObject
     128,   // NativeFunctionObject, StructInstanceObject, EnumInstanceObject, UpvalueCellObject
     192,   // ScriptFunctionObject, CoroutineObject (small)
-    256,   // Environment (small), CoroutineObject (medium)
+    256,   // Environment (small), CoroutineObject (medium), StructTypeObject
     384,   // Environment (medium), ScriptFunctionObject (large)
     512,   // Environment (large)
     768,
@@ -5933,6 +5935,16 @@ private:
                  nullptr,
                  nullptr,
                  std::move(field_names));
+            return;
+        }
+        if (auto* assoc = dynamic_cast<AssocCallExpr*>(expr)) {
+            // Desugar TypeName::fn_name(args) → LoadVar(TypeName).LoadMember(fn_name).Call(args)
+            emit_load_symbol(assoc->type_name, assoc->span);
+            emit(BytecodeOp::LoadMember, assoc->span, 0, assoc->fn_name);
+            for (auto& arg : assoc->args) {
+                compile_expr(arg.get());
+            }
+            emit(BytecodeOp::Call, assoc->span, static_cast<int>(assoc->args.size()));
             return;
         }
         if (auto* enum_init = dynamic_cast<EnumInitExpr*>(expr)) {

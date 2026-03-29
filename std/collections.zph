@@ -1,3 +1,7 @@
+// std/collections.zph — Collections with Rust-like method syntax
+
+// ─── Array utilities ─────────────────────────────────────────────────────────
+
 export fn range(start: int, end: int) -> Array {
     return __zephyr_std_range(start, end);
 }
@@ -37,94 +41,87 @@ export fn fold_array(arr: Array, init: any, f: Function) -> any {
 
 // ─── HashMap ─────────────────────────────────────────────────────────────────
 
-export fn hashmap_new() -> any {
-    return __zephyr_hashmap_new();
-}
+export struct HashMap { __h: any }
 
-export fn hashmap_set(m: any, key: string, val: any) -> any {
-    return __zephyr_hashmap_set(m, key, val);
-}
-
-export fn hashmap_get(m: any, key: string) -> any {
-    return __zephyr_hashmap_get(m, key);
-}
-
-export fn hashmap_has(m: any, key: string) -> bool {
-    return __zephyr_hashmap_has(m, key);
-}
-
-export fn hashmap_delete(m: any, key: string) -> any {
-    return __zephyr_hashmap_delete(m, key);
-}
-
-export fn hashmap_keys(m: any) -> Array {
-    return __zephyr_hashmap_keys(m);
-}
-
-export fn hashmap_values(m: any) -> Array {
-    return __zephyr_hashmap_values(m);
-}
-
-export fn hashmap_size(m: any) -> int {
-    return __zephyr_hashmap_size(m);
-}
-
-export fn hashmap_clear(m: any) -> any {
-    return __zephyr_hashmap_clear(m);
+export impl HashMap {
+    fn new() -> HashMap {
+        return HashMap { __h: __zephyr_hashmap_new() };
+    }
+    fn set(self, key: string, val: any) {
+        __zephyr_hashmap_set(self.__h, key, val);
+    }
+    fn get(self, key: string) -> any {
+        return __zephyr_hashmap_get(self.__h, key);
+    }
+    fn has(self, key: string) -> bool {
+        return __zephyr_hashmap_has(self.__h, key);
+    }
+    fn delete(self, key: string) {
+        __zephyr_hashmap_delete(self.__h, key);
+    }
+    fn keys(self) -> Array {
+        return __zephyr_hashmap_keys(self.__h);
+    }
+    fn values(self) -> Array {
+        return __zephyr_hashmap_values(self.__h);
+    }
+    fn size(self) -> int {
+        return __zephyr_hashmap_size(self.__h);
+    }
+    fn clear(self) {
+        __zephyr_hashmap_clear(self.__h);
+    }
 }
 
 // ─── Set ─────────────────────────────────────────────────────────────────────
 
-export fn set_new() -> any {
-    return __zephyr_set_new();
-}
+export struct Set { __h: any }
 
-export fn set_add(s: any, val: any) -> any {
-    return __zephyr_set_add(s, val);
-}
-
-export fn set_has(s: any, val: any) -> bool {
-    return __zephyr_set_has(s, val);
-}
-
-export fn set_delete(s: any, val: any) -> any {
-    return __zephyr_set_delete(s, val);
-}
-
-export fn set_size(s: any) -> int {
-    return __zephyr_set_size(s);
-}
-
-export fn set_to_array(s: any) -> Array {
-    return __zephyr_set_to_array(s);
+export impl Set {
+    fn new() -> Set {
+        return Set { __h: __zephyr_set_new() };
+    }
+    fn add(self, val: any) {
+        __zephyr_set_add(self.__h, val);
+    }
+    fn has(self, val: any) -> bool {
+        return __zephyr_set_has(self.__h, val);
+    }
+    fn delete(self, val: any) {
+        __zephyr_set_delete(self.__h, val);
+    }
+    fn size(self) -> int {
+        return __zephyr_set_size(self.__h);
+    }
+    fn to_array(self) -> Array {
+        return __zephyr_set_to_array(self.__h);
+    }
 }
 
 // ─── Queue ───────────────────────────────────────────────────────────────────
 
-export fn queue_new() -> any {
-    return __zephyr_queue_new();
-}
+export struct Queue { __h: any }
 
-export fn queue_push(q: any, val: any) -> any {
-    return __zephyr_queue_push(q, val);
-}
-
-export fn queue_pop(q: any) -> any {
-    return __zephyr_queue_pop(q);
-}
-
-export fn queue_peek(q: any) -> any {
-    return __zephyr_queue_peek(q);
-}
-
-export fn queue_size(q: any) -> int {
-    return __zephyr_queue_size(q);
-}
-
-export fn queue_is_empty(q: any) -> bool {
-    return __zephyr_queue_is_empty(q);
-}
-
-export fn queue_to_array(q: any) -> Array {
-    return __zephyr_queue_to_array(q);
+export impl Queue {
+    fn new() -> Queue {
+        return Queue { __h: __zephyr_queue_new() };
+    }
+    fn push(self, val: any) {
+        __zephyr_queue_push(self.__h, val);
+    }
+    fn pop(self) -> any {
+        return __zephyr_queue_pop(self.__h);
+    }
+    fn peek(self) -> any {
+        return __zephyr_queue_peek(self.__h);
+    }
+    fn size(self) -> int {
+        return __zephyr_queue_size(self.__h);
+    }
+    fn is_empty(self) -> bool {
+        return __zephyr_queue_is_empty(self.__h);
+    }
+    fn to_array(self) -> Array {
+        return __zephyr_queue_to_array(self.__h);
+    }
 }
