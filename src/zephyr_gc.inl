@@ -9815,6 +9815,108 @@ void Runtime::install_core() {
         }, {"string"}, "any");
     });
 
+    // std/io built-in module
+    register_module("std/io", [this](ZephyrModuleBinder& m) {
+        m.add_function("print", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cout << " ";
+                first = false;
+                std::cout << to_string(v);
+            }
+            std::cout << std::endl;
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("println", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cout << " ";
+                first = false;
+                std::cout << to_string(v);
+            }
+            std::cout << "\n";
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("eprint", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cerr << " ";
+                first = false;
+                std::cerr << to_string(v);
+            }
+            std::cerr << std::endl;
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("eprintln", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cerr << " ";
+                first = false;
+                std::cerr << to_string(v);
+            }
+            std::cerr << "\n";
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("read_line", [](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            std::string line;
+            if (!std::getline(std::cin, line)) return ZephyrValue(std::string(""));
+            return ZephyrValue(line);
+        }, {}, "string");
+    });
+
+    // std/gc built-in module
+    register_module("std/gc", [this](ZephyrModuleBinder& m) {
+        m.add_function("pause_p50_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p50_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("pause_p95_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p95_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("pause_p99_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p99_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("frame_miss_count", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().frame_budget_miss_count));
+        }, {}, "int");
+
+        m.add_function("collect", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            collect_garbage();
+            return ZephyrValue();
+        }, {}, "Nil");
+    });
+
+    // std/profiler built-in module
+    register_module("std/profiler", [this](ZephyrModuleBinder& m) {
+        m.add_function("start", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            start_profiling();
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        // stop() returns array of [name, calls, total_us, self_us] per entry
+        m.add_function("stop", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            ZephyrProfileReport report = stop_profiling();
+            std::vector<ZephyrValue> entries;
+            entries.reserve(report.entries.size());
+            for (const auto& e : report.entries) {
+                std::vector<ZephyrValue> row = {
+                    ZephyrValue(e.function_name),
+                    ZephyrValue(static_cast<std::int64_t>(e.call_count)),
+                    ZephyrValue(static_cast<std::int64_t>(e.total_ns / 1000)),
+                    ZephyrValue(static_cast<std::int64_t>(e.self_ns  / 1000)),
+                };
+                entries.push_back(ZephyrValue(std::move(row)));
+            }
+            return ZephyrValue(std::move(entries));
+        }, {}, "Array");
+    });
+
     // std/collections — HashMap, Set, Queue host-backed global functions
     {
         static auto s_hashmap_class = std::make_shared<ZephyrHostClass>("HashMap");
@@ -10017,6 +10119,107 @@ void Runtime::install_core() {
                 return ZephyrValue(ZephyrValue::Array(q->begin(), q->end()));
             }, {}, "Array");
     }
+
+    // std/io built-in module
+    register_module("std/io", [](ZephyrModuleBinder& m) {
+        m.add_function("print", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cout << " ";
+                first = false;
+                std::cout << to_string(v);
+            }
+            std::cout << std::endl;
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("println", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cout << " ";
+                first = false;
+                std::cout << to_string(v);
+            }
+            std::cout << "\n";
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("eprint", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cerr << " ";
+                first = false;
+                std::cerr << to_string(v);
+            }
+            std::cerr << std::endl;
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("eprintln", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            bool first = true;
+            for (const auto& v : args) {
+                if (!first) std::cerr << " ";
+                first = false;
+                std::cerr << to_string(v);
+            }
+            std::cerr << "\n";
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("read_line", [](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            std::string line;
+            if (!std::getline(std::cin, line)) return ZephyrValue(std::string(""));
+            return ZephyrValue(line);
+        }, {}, "string");
+    });
+
+    // std/gc built-in module
+    register_module("std/gc", [this](ZephyrModuleBinder& m) {
+        m.add_function("pause_p50_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p50_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("pause_p95_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p95_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("pause_p99_us", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().p99_ns / 1000));
+        }, {}, "int");
+
+        m.add_function("frame_miss_count", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            return ZephyrValue(static_cast<std::int64_t>(get_gc_pause_stats().frame_budget_miss_count));
+        }, {}, "int");
+
+        m.add_function("collect", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            collect_garbage();
+            return ZephyrValue();
+        }, {}, "Nil");
+    });
+
+    // std/profiler built-in module
+    register_module("std/profiler", [this](ZephyrModuleBinder& m) {
+        m.add_function("start", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            start_profiling();
+            return ZephyrValue();
+        }, {}, "Nil");
+
+        m.add_function("stop", [this](const std::vector<ZephyrValue>&) -> ZephyrValue {
+            ZephyrProfileReport report = stop_profiling();
+            ZephyrValue::Array entries;
+            entries.reserve(report.entries.size());
+            for (const auto& e : report.entries) {
+                ZephyrValue::Array row = {
+                    ZephyrValue(e.function_name),
+                    ZephyrValue(static_cast<std::int64_t>(e.call_count)),
+                    ZephyrValue(static_cast<std::int64_t>(e.total_ns / 1000)),
+                    ZephyrValue(static_cast<std::int64_t>(e.self_ns  / 1000)),
+                };
+                entries.push_back(ZephyrValue(std::move(row)));
+            }
+            return ZephyrValue(std::move(entries));
+        }, {}, "Array");
+    });
 }
 
 void Runtime::mark_roots() {

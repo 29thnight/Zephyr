@@ -2,6 +2,7 @@
 #include "bench_runner.hpp"
 
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -42,7 +43,7 @@ void configure_default_module_paths(zephyr::ZephyrVM& vm, const std::filesystem:
 
 void print_usage() {
     std::cout << "Zephyr CLI\n"
-              << "  zephyr run <file>\n"
+              << "  zephyr run [--profile] <file>\n"
               << "  zephyr check <file>\n"
               << "  zephyr repl\n"
               << "  zephyr stats <file>\n"
@@ -111,15 +112,34 @@ std::string runtime_stats_json(const zephyr::ZephyrRuntimeStats& stats, const ze
     return out.str();
 }
 
-int run_file(const std::filesystem::path& path, const std::filesystem::path& executable_path) {
+int run_file(const std::filesystem::path& path, const std::filesystem::path& executable_path, bool profile = false) {
     zephyr::ZephyrVM vm;
     configure_default_module_paths(vm, executable_path);
+    if (profile) vm.start_profiling();
     vm.execute_file(path);
     const auto handle = vm.get_function(std::filesystem::weakly_canonical(path).string(), "main");
     if (handle.has_value()) {
         const zephyr::ZephyrValue result = vm.call(*handle);
         if (!result.is_nil()) {
             std::cout << zephyr::to_string(result) << std::endl;
+        }
+    }
+    if (profile) {
+        const auto report = vm.stop_profiling();
+        std::cout << "\n--- Profile Report ---\n";
+        std::cout << std::left
+                  << std::setw(40) << "Function"
+                  << std::setw(10) << "Calls"
+                  << std::setw(14) << "Self (us)"
+                  << std::setw(14) << "Total (us)"
+                  << "\n" << std::string(78, '-') << "\n";
+        for (const auto& e : report.entries) {
+            std::cout << std::left
+                      << std::setw(40) << e.function_name
+                      << std::setw(10) << e.call_count
+                      << std::setw(14) << (e.self_ns / 1000)
+                      << std::setw(14) << (e.total_ns / 1000)
+                      << "\n";
         }
     }
     return 0;
@@ -213,7 +233,18 @@ int main(int argc, char** argv) {
                 print_usage();
                 return 1;
             }
-            return run_file(argv[2], argv[0]);
+            bool profile_flag = false;
+            std::filesystem::path run_path;
+            for (int i = 2; i < argc; ++i) {
+                const std::string_view arg(argv[i]);
+                if (arg == "--profile") {
+                    profile_flag = true;
+                } else {
+                    run_path = argv[i];
+                }
+            }
+            if (run_path.empty()) { print_usage(); return 1; }
+            return run_file(run_path, argv[0], profile_flag);
         }
         if (command == "check") {
             if (argc < 3) {
