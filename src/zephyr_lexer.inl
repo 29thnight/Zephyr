@@ -1,4 +1,4 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// Part of src/zephyr.cpp — included by zephyr.cpp
 class Lexer {
 public:
     Lexer(std::string source, std::string module_name, std::size_t line = 1, std::size_t column = 1)
@@ -37,7 +37,15 @@ public:
                     tokens.push_back(make_token(TokenType::Comma, ",", start));
                     break;
                 case '.':
-                    tokens.push_back(make_token(TokenType::Dot, ".", start));
+                    if (match('.')) {
+                        if (match('=')) {
+                            tokens.push_back(make_token(TokenType::DotDotEqual, "..=", start));
+                        } else {
+                            tokens.push_back(make_token(TokenType::DotDot, "..", start));
+                        }
+                    } else {
+                        tokens.push_back(make_token(TokenType::Dot, ".", start));
+                    }
                     break;
                 case ';':
                     tokens.push_back(make_token(TokenType::Semicolon, ";", start));
@@ -116,7 +124,7 @@ public:
                     if (match('.')) {
                         tokens.push_back(make_token(TokenType::QuestionDot, "?.", start));
                     } else {
-                        return make_loc_error<std::vector<Token>>(module_name_, start, "Unexpected character '?'.");
+                        tokens.push_back(make_token(TokenType::Question, "?", start));
                     }
                     break;
                 case '&':
@@ -511,12 +519,14 @@ struct IndexExpr final : Expr {
 struct CallExpr final : Expr {
     ExprPtr callee;
     std::vector<ExprPtr> arguments;
+    std::vector<TypeRef> type_arguments;  // Generic type arguments: <Int, String, ...>
 };
 
 struct OptionalCallExpr final : Expr {
     ExprPtr object;
     std::string member;
     std::vector<ExprPtr> arguments;
+    std::vector<TypeRef> type_arguments;  // Generic type arguments: <Int, String, ...>
 };
 
 struct ResumeExpr final : Expr {
@@ -586,6 +596,33 @@ struct EnumPattern final : Pattern {
     std::vector<PatternPtr> payload;
 };
 
+struct StructFieldPattern {
+    std::string name;
+    PatternPtr pattern;
+    Span span;
+};
+
+struct StructPattern final : Pattern {
+    TypeRef type_name;
+    std::vector<StructFieldPattern> fields;
+};
+
+struct RangePattern final : Pattern {
+    std::variant<std::int64_t, double> start;
+    std::variant<std::int64_t, double> end;
+    bool inclusive_end = false;
+};
+
+struct ArrayPattern final : Pattern {
+    std::vector<PatternPtr> elements;
+    bool has_rest = false;
+    std::string rest_name;
+};
+
+struct TuplePattern final : Pattern {
+    std::vector<PatternPtr> elements;
+};
+
 struct OrPattern final : Pattern {
     std::vector<PatternPtr> alternatives;
 };
@@ -609,7 +646,9 @@ struct LetStmt final : Stmt {
     std::string name;
     bool mutable_value = false;
     std::optional<TypeRef> type;
+    PatternPtr pattern;
     ExprPtr initializer;
+    std::unique_ptr<BlockStmt> else_branch;
 };
 
 struct BlockStmt final : Stmt {
@@ -618,24 +657,34 @@ struct BlockStmt final : Stmt {
 
 struct IfStmt final : Stmt {
     ExprPtr condition;
+    PatternPtr let_pattern;
+    ExprPtr let_subject;
     std::unique_ptr<BlockStmt> then_branch;
     StmtPtr else_branch;
 };
 
 struct WhileStmt final : Stmt {
+    std::string label;
     ExprPtr condition;
+    PatternPtr let_pattern;
+    ExprPtr let_subject;
     std::unique_ptr<BlockStmt> body;
 };
 
 struct ForStmt final : Stmt {
+    std::string label;
     std::string name;
     ExprPtr iterable;
     std::unique_ptr<BlockStmt> body;
 };
 
-struct BreakStmt final : Stmt {};
+struct BreakStmt final : Stmt {
+    std::string label;
+};
 
-struct ContinueStmt final : Stmt {};
+struct ContinueStmt final : Stmt {
+    std::string label;
+};
 
 struct ReturnStmt final : Stmt {
     ExprPtr value;
@@ -647,6 +696,7 @@ struct YieldStmt final : Stmt {
 
 struct FunctionDecl final : Stmt {
     std::string name;
+    std::vector<std::string> generic_params;  // e.g., {"T", "U"} for fn foo<T, U>
     std::vector<Param> params;
     std::optional<TypeRef> return_type;
     std::unique_ptr<BlockStmt> body;
@@ -655,6 +705,7 @@ struct FunctionDecl final : Stmt {
 struct TraitMethodDecl {
     Span span;
     std::string name;
+    std::vector<std::string> generic_params;  // e.g., {"T"} for fn method<T>
     std::vector<Param> params;
     std::optional<TypeRef> return_type;
 };
@@ -666,6 +717,7 @@ struct StructFieldDecl {
 
 struct StructDecl final : Stmt {
     std::string name;
+    std::vector<std::string> generic_params;  // e.g., {"T"} for struct Pair<T>
     std::vector<StructFieldDecl> fields;
 };
 
@@ -681,10 +733,12 @@ struct EnumDecl final : Stmt {
 
 struct TraitDecl final : Stmt {
     std::string name;
+    std::vector<std::string> generic_params;  // e.g., {"T"} for trait Container<T>
     std::vector<TraitMethodDecl> methods;
 };
 
 struct ImplDecl final : Stmt {
+    std::vector<std::string> generic_params;  // e.g., {"T"} for impl<T>
     TypeRef trait_name;
     TypeRef for_type;
     std::vector<std::unique_ptr<FunctionDecl>> methods;

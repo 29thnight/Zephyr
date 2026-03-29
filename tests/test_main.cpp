@@ -83,6 +83,11 @@ int main() {
         test_wave_e1_class_binder();
         test_wave_e1_profiler_report();
         test_wave_f_coroutine_trace_report();
+        test_generic_function_parsing();
+        test_generic_struct_parsing();
+        test_generic_function_execution();
+        test_generic_struct_instantiation();
+        test_generic_multi_param_function();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

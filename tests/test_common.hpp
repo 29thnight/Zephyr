@@ -121,8 +121,14 @@ inline void run_corpus_case(const std::filesystem::path& path, const std::string
 void test_execute_and_call();
 void test_match_enum();
 void test_match_guard_and_or_pattern();
+void test_match_struct_range_and_if_let();
+void test_while_let_and_array_tuple_patterns();
+void test_language_expansions_wave_g();
 void test_match_bool_and_nil_literals();
 void test_trait_impl_dispatch();
+void test_struct_literal_field_shorthand();
+void test_error_propagation_lowering();
+void test_generic_type_parameters();
 void test_dap_server_smoke();
 void test_snapshot_restore();
 void test_host_object();
@@ -151,6 +157,7 @@ void test_serialization_requires_stable_handles();
 void test_serialization_schema_rejects_unknown_version();
 void test_bytecode_loop_and_branch();
 void test_bytecode_for_in_array();
+void test_bytecode_for_in_range_syntax();
 void test_bytecode_struct_enum_match();
 void test_bytecode_local_slots_shadow_and_closure_sync();
 void test_closure_cell_capture_survives_outer_return_and_gc();
@@ -197,5 +204,10 @@ void test_wave_e1_class_binder();
 void test_wave_e1_profiler_report();
 void test_corpus_scripts();
 void test_wave_f_coroutine_trace_report();
+void test_generic_function_parsing();
+void test_generic_struct_parsing();
+void test_generic_function_execution();
+void test_generic_struct_instantiation();
+void test_generic_multi_param_function();
 
 }  // namespace zephyr_tests

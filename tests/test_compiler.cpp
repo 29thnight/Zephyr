@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+﻿#include "test_common.hpp"
 
 namespace zephyr_tests {
 
@@ -320,6 +320,42 @@ void test_bytecode_for_in_array() {
     };
     const auto result = vm.call(*handle, {zephyr::ZephyrValue(values)});
     require(result.is_int() && result.as_int() == 7, "unexpected bytecode for-in result");
+}
+
+void test_bytecode_for_in_range_syntax() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(
+        R"(
+            fn sum_exclusive(limit: Int) -> Int {
+                let mut total: Int = 0;
+                for value in 0..limit {
+                    total = total + value;
+                }
+                return total;
+            }
+
+            fn sum_inclusive(limit: Int) -> Int {
+                let mut total: Int = 0;
+                for value in 0..=limit {
+                    total = total + value;
+                }
+                return total;
+            }
+        )",
+        "unit_for_range",
+        std::filesystem::current_path());
+
+    const auto exclusive = vm.get_function("unit_for_range", "sum_exclusive");
+    require(exclusive.has_value(), "missing sum_exclusive handle");
+    const auto exclusive_result = vm.call(*exclusive, {zephyr::ZephyrValue(5)});
+    require(exclusive_result.is_int() && exclusive_result.as_int() == 10,
+            "0..limit should exclude the upper bound");
+
+    const auto inclusive = vm.get_function("unit_for_range", "sum_inclusive");
+    require(inclusive.has_value(), "missing sum_inclusive handle");
+    const auto inclusive_result = vm.call(*inclusive, {zephyr::ZephyrValue(5)});
+    require(inclusive_result.is_int() && inclusive_result.as_int() == 15,
+            "0..=limit should include the upper bound");
 }
 
 void test_bytecode_struct_enum_match() {
@@ -1021,6 +1057,86 @@ void test_wave_a_int_arithmetic_fastpath() {
     // all conditions true: 1+2+4+8+16+32 = 63
     require(cmp_result.is_int() && cmp_result.as_int() == 63,
             "int fastpath: compare_ops(3,7) must be 63 (got " + std::to_string(cmp_result.as_int()) + ")");
+}
+
+void test_generic_function_parsing() {
+    zephyr::ZephyrVM vm;
+    // Generic function declaration should parse and check cleanly (no exception)
+    bool accepted = false;
+    try {
+        vm.check_string(R"(
+            fn identity<T>(x: T) -> T { return x; }
+            let r = identity<int>(42);
+        )", "unit_generic_fn_parse", std::filesystem::current_path());
+        accepted = true;
+    } catch (const std::exception& error) {
+        require(false, std::string("generic function parsing: unexpected error: ") + error.what());
+    }
+    require(accepted, "generic function: check_string should accept generic fn syntax");
+}
+
+void test_generic_struct_parsing() {
+    zephyr::ZephyrVM vm;
+    bool accepted = false;
+    try {
+        vm.check_string(R"(
+            struct Pair<A, B> {
+                first: A,
+                second: B,
+            }
+            let p = Pair { first: 1, second: "hello" };
+        )", "unit_generic_struct_parse", std::filesystem::current_path());
+        accepted = true;
+    } catch (const std::exception& error) {
+        require(false, std::string("generic struct parsing: unexpected error: ") + error.what());
+    }
+    require(accepted, "generic struct: check_string should accept generic struct syntax");
+}
+
+void test_generic_function_execution() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(R"(
+        fn identity<T>(x: T) -> T { return x; }
+        fn swap<A, B>(a: A, b: B) -> B { return b; }
+        export fn run_identity() -> Int { return identity<int>(42); }
+    )", "unit_generic_fn_exec", std::filesystem::current_path());
+    const auto handle = vm.get_function("unit_generic_fn_exec", "run_identity");
+    require(handle.has_value(), "generic function execution: run_identity must exist");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 42,
+            "generic function execution: identity<int>(42) should return 42");
+}
+
+void test_generic_struct_instantiation() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(R"(
+        struct Pair<A, B> {
+            first: A,
+            second: B,
+        }
+        export fn run_pair() -> Int {
+            let p = Pair { first: 10, second: "world" };
+            return p.first;
+        }
+    )", "unit_generic_struct_inst", std::filesystem::current_path());
+    const auto handle = vm.get_function("unit_generic_struct_inst", "run_pair");
+    require(handle.has_value(), "generic struct instantiation: run_pair must exist");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 10,
+            "generic struct instantiation: p.first should be 10");
+}
+
+void test_generic_multi_param_function() {
+    zephyr::ZephyrVM vm;
+    vm.execute_string(R"(
+        fn first<A, B>(a: A, b: B) -> A { return a; }
+        export fn run_first() -> Int { return first<int, string>(99, "ignored"); }
+    )", "unit_generic_multi_param", std::filesystem::current_path());
+    const auto handle = vm.get_function("unit_generic_multi_param", "run_first");
+    require(handle.has_value(), "generic multi-param function: run_first must exist");
+    const auto result = vm.call(*handle);
+    require(result.is_int() && result.as_int() == 99,
+            "generic multi-param function: first<int,string>(99, ignored) should be 99");
 }
 
 }  // namespace zephyr_tests

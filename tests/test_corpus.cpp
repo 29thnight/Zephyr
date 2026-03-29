@@ -16,6 +16,7 @@ void test_corpus_scripts() {
         {corpus_root / "04_pattern_matching.zph", "zero\nsmall\nnegative\nlarge"},
         {corpus_root / "05_coroutine.zph", "0\n1\n2"},
         {corpus_root / "06_traits.zph", "Meow, I am Kitty"},
+        {corpus_root / "07_generics.zph", "42\nhello\n10"},
     };
 
     for (const auto& corpus_case : cases) {

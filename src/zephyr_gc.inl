@@ -1971,7 +1971,9 @@ RuntimeResult<Value> Runtime::build_struct_value(Environment* environment, const
             return make_loc_error<Value>(module_name, span, "Unknown struct field '" + field_names[i] + "'.");
         }
         const auto& spec = type->fields[field_index];
-        ZEPHYR_TRY(enforce_type(field_values[i], spec.type_name, span, module_name, "struct field"));
+        std::optional<std::string> field_type = (std::find(type->generic_params.begin(), type->generic_params.end(), spec.type_name) != type->generic_params.end())
+            ? std::optional<std::string>(std::nullopt) : std::optional<std::string>(spec.type_name);
+        ZEPHYR_TRY(enforce_type(field_values[i], field_type, span, module_name, "struct field"));
         ZEPHYR_TRY(validate_handle_store(field_values[i], HandleContainerKind::HeapField, span, module_name, "struct field initialization"));
         instance->field_values[field_index] = field_values[i];
         note_struct_field_write(instance, field_index, field_values[i]);
@@ -4095,6 +4097,7 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
             case BytecodeOp::DeclareStruct: {
                 auto* struct_decl = static_cast<StructDecl*>(metadata.stmt);
                 auto* type = allocate<StructTypeObject>(struct_decl->name);
+                type->generic_params = struct_decl->generic_params;
                 for (const auto& field : struct_decl->fields) {
                     type->fields.push_back(StructFieldSpec{field.name, field.type.display_name()});
                 }
@@ -4314,8 +4317,10 @@ VoidResult Runtime::push_coroutine_script_frame(CoroutineObject* coroutine, Scri
 
     for (std::size_t i = 0; i < function->params.size(); ++i) {
         const auto& param = function->params[i];
+        const bool is_generic = param.type.has_value() &&
+            std::find(function->generic_params.begin(), function->generic_params.end(), param.type->display_name()) != function->generic_params.end();
         const std::optional<std::string> type_name =
-            param.type.has_value() ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
+            (param.type.has_value() && !is_generic) ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
         ZEPHYR_TRY(enforce_type(args[i], type_name, param.span, execution_module, "parameter"));
         define_value(call_env, param.name, args[i], true, type_name);
         if (i < frame.locals.size()) {
@@ -6107,6 +6112,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
             case BytecodeOp::DeclareStruct: {
                 auto* struct_decl = static_cast<StructDecl*>(metadata.stmt);
                 auto* type = allocate<StructTypeObject>(struct_decl->name);
+                type->generic_params = struct_decl->generic_params;
                 for (const auto& field : struct_decl->fields) {
                     type->fields.push_back(StructFieldSpec{field.name, field.type.display_name()});
                 }
@@ -7754,8 +7760,10 @@ RuntimeResult<Value> Runtime::call_value(const Value& callee, const std::vector<
                 Value result = Value::nil();
                 for (std::size_t i = 0; i < function->params.size(); ++i) {
                     const auto& param = function->params[i];
+                    const bool is_generic = param.type.has_value() &&
+                        std::find(function->generic_params.begin(), function->generic_params.end(), param.type->display_name()) != function->generic_params.end();
                     const std::optional<std::string> type_name =
-                        param.type.has_value() ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
+                        (param.type.has_value() && !is_generic) ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
                     auto type_result = enforce_type(args[i], type_name, param.span, execution_module, "parameter '" + param.name + "'");
                     if (!type_result) {
                         return make_loc_error<Value>(module_name,
@@ -7790,8 +7798,10 @@ RuntimeResult<Value> Runtime::call_value(const Value& callee, const std::vector<
                                                              &args));
                     result = lightweight_result;
                 }
+                const bool return_is_generic = function->return_type.has_value() &&
+                    std::find(function->generic_params.begin(), function->generic_params.end(), function->return_type->display_name()) != function->generic_params.end();
                 const std::optional<std::string> return_type =
-                    function->return_type.has_value() ? std::optional<std::string>(function->return_type->display_name()) : std::nullopt;
+                    (function->return_type.has_value() && !return_is_generic) ? std::optional<std::string>(function->return_type->display_name()) : std::nullopt;
                 ZEPHYR_TRY(enforce_type(result, return_type, call_span, execution_module, "return"));
                 return result;
             }
@@ -7803,8 +7813,10 @@ RuntimeResult<Value> Runtime::call_value(const Value& callee, const std::vector<
             }
             for (std::size_t i = 0; i < function->params.size(); ++i) {
                 const auto& param = function->params[i];
+                const bool is_generic = param.type.has_value() &&
+                    std::find(function->generic_params.begin(), function->generic_params.end(), param.type->display_name()) != function->generic_params.end();
                 const std::optional<std::string> type_name =
-                    param.type.has_value() ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
+                    (param.type.has_value() && !is_generic) ? std::optional<std::string>(param.type->display_name()) : std::nullopt;
                 auto type_result = enforce_type(args[i], type_name, param.span, execution_module, "parameter '" + param.name + "'");
                 if (!type_result) {
                     return make_loc_error<Value>(module_name,
@@ -7821,8 +7833,10 @@ RuntimeResult<Value> Runtime::call_value(const Value& callee, const std::vector<
             fake_module.name = execution_module;
             fake_module.environment = call_env;
             ZEPHYR_TRY_ASSIGN(result, execute_bytecode(function, call_env, fake_module, call_span));
+            const bool ret_is_generic = function->return_type.has_value() &&
+                std::find(function->generic_params.begin(), function->generic_params.end(), function->return_type->display_name()) != function->generic_params.end();
             const std::optional<std::string> return_type =
-                function->return_type.has_value() ? std::optional<std::string>(function->return_type->display_name()) : std::nullopt;
+                (function->return_type.has_value() && !ret_is_generic) ? std::optional<std::string>(function->return_type->display_name()) : std::nullopt;
             ZEPHYR_TRY(enforce_type(result, return_type, call_span, execution_module, "return"));
             return result;
         };
@@ -8076,7 +8090,10 @@ RuntimeResult<Value> Runtime::evaluate_struct_init(Environment* environment, Str
             return make_loc_error<Value>(module_name, field.span, "Unknown struct field '" + field.name + "'.");
         }
         ZEPHYR_TRY_ASSIGN(value, evaluate(environment, field.value.get(), module_name));
-        ZEPHYR_TRY(enforce_type(value, type->fields[field_index].type_name, field.span, module_name, "struct field"));
+        const auto& raw_ft = type->fields[field_index].type_name;
+        std::optional<std::string> eff_ft = (std::find(type->generic_params.begin(), type->generic_params.end(), raw_ft) != type->generic_params.end())
+            ? std::optional<std::string>(std::nullopt) : std::optional<std::string>(raw_ft);
+        ZEPHYR_TRY(enforce_type(value, eff_ft, field.span, module_name, "struct field"));
         ZEPHYR_TRY(validate_handle_store(value, HandleContainerKind::HeapField, field.span, module_name, "struct field"));
         instance->field_values[field_index] = value;
         note_struct_field_write(instance, field_index, value);
@@ -8816,6 +8833,7 @@ Runtime::FlowResult Runtime::execute(Environment* environment, Stmt* stmt, Modul
     }
     if (auto* struct_decl = dynamic_cast<StructDecl*>(stmt)) {
         auto* type = allocate<StructTypeObject>(struct_decl->name);
+        type->generic_params = struct_decl->generic_params;
         for (const auto& field : struct_decl->fields) {
             type->fields.push_back(StructFieldSpec{field.name, field.type.display_name()});
         }

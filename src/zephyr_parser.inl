@@ -1,4 +1,4 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// Part of src/zephyr.cpp — included by zephyr.cpp
 class Parser {
 public:
     Parser(std::vector<Token> tokens, std::string module_name) : tokens_(std::move(tokens)), module_name_(std::move(module_name)) {}
@@ -35,6 +35,68 @@ private:
         return false;
     }
 
+    const Token* peek_offset(std::size_t offset) const {
+        const std::size_t index = current_ + offset;
+        if (index >= tokens_.size()) {
+            return nullptr;
+        }
+        return &tokens_[index];
+    }
+
+    bool lookahead_type_ref(std::size_t& offset) const {
+        const Token* token = peek_offset(offset);
+        if (token == nullptr || token->type != TokenType::Identifier) {
+            return false;
+        }
+        ++offset;
+
+        while (true) {
+            token = peek_offset(offset);
+            if (token == nullptr || token->type != TokenType::DoubleColon) {
+                break;
+            }
+            ++offset;
+            token = peek_offset(offset);
+            if (token == nullptr || token->type != TokenType::Identifier) {
+                return false;
+            }
+            ++offset;
+        }
+
+        return true;
+    }
+
+    bool lookahead_generic_call_type_arguments() const {
+        if (!check(TokenType::Less)) {
+            return false;
+        }
+
+        std::size_t offset = 1;
+        if (!lookahead_type_ref(offset)) {
+            return false;
+        }
+
+        while (true) {
+            const Token* token = peek_offset(offset);
+            if (token == nullptr) {
+                return false;
+            }
+            if (token->type == TokenType::Comma) {
+                ++offset;
+                if (!lookahead_type_ref(offset)) {
+                    return false;
+                }
+                continue;
+            }
+            if (token->type == TokenType::Greater) {
+                ++offset;
+                token = peek_offset(offset);
+                return token != nullptr && token->type == TokenType::LeftParen;
+            }
+            return false;
+        }
+    }
+
     RuntimeResult<Token> consume(TokenType type, const std::string& message) {
         if (check(type)) {
             return advance();
@@ -61,7 +123,9 @@ private:
     RuntimeResult<std::unique_ptr<Stmt>> parse_return_stmt();
     RuntimeResult<std::unique_ptr<Stmt>> parse_yield_stmt();
     VoidResult parse_function_signature(std::vector<Param>& params, std::optional<TypeRef>& return_type);
+    VoidResult parse_generic_type_params(std::vector<std::string>& out_params);
     RuntimeResult<TypeRef> parse_type_ref();
+    RuntimeResult<std::vector<TypeRef>> parse_type_arguments();
     RuntimeResult<ExprPtr> parse_expression();
     RuntimeResult<ExprPtr> parse_assignment();
     RuntimeResult<ExprPtr> parse_or();
@@ -135,6 +199,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_function_decl() {
     auto function = std::make_unique<FunctionDecl>();
     function->span = name.span;
     function->name = name.lexeme;
+    ZEPHYR_TRY(parse_generic_type_params(function->generic_params));
     ZEPHYR_TRY(parse_function_signature(function->params, function->return_type));
     ZEPHYR_TRY_ASSIGN(body, parse_block_stmt("Expected function body."));
     function->body = std::move(body);
@@ -146,6 +211,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_struct_decl() {
     auto decl = std::make_unique<StructDecl>();
     decl->span = name.span;
     decl->name = name.lexeme;
+    ZEPHYR_TRY(parse_generic_type_params(decl->generic_params));
     ZEPHYR_TRY(consume(TokenType::LeftBrace, "Expected '{' after struct name."));
     while (!check(TokenType::RightBrace) && !is_at_end()) {
         StructFieldDecl field;
@@ -196,6 +262,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_trait_decl() {
     auto decl = std::make_unique<TraitDecl>();
     decl->span = name.span;
     decl->name = name.lexeme;
+    ZEPHYR_TRY(parse_generic_type_params(decl->generic_params));
     ZEPHYR_TRY(consume(TokenType::LeftBrace, "Expected '{' after trait name."));
     while (!check(TokenType::RightBrace) && !is_at_end()) {
         ZEPHYR_TRY(consume(TokenType::KeywordFn, "Expected 'fn' in trait body."));
@@ -215,6 +282,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_trait_decl() {
 RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_impl_decl() {
     auto decl = std::make_unique<ImplDecl>();
     decl->span = previous().span;
+    ZEPHYR_TRY(parse_generic_type_params(decl->generic_params));
     ZEPHYR_TRY_ASSIGN(trait_name, parse_type_ref());
     decl->trait_name = std::move(trait_name);
     ZEPHYR_TRY(consume(TokenType::KeywordFor, "Expected 'for' in impl declaration."));
@@ -227,6 +295,7 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_impl_decl() {
         auto method = std::make_unique<FunctionDecl>();
         method->span = name.span;
         method->name = name.lexeme;
+        ZEPHYR_TRY(parse_generic_type_params(method->generic_params));
         ZEPHYR_TRY(parse_function_signature(method->params, method->return_type));
         ZEPHYR_TRY_ASSIGN(body, parse_block_stmt("Expected method body."));
         method->body = std::move(body);
@@ -385,6 +454,32 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_yield_stmt() {
     return stmt;
 }
 
+VoidResult Parser::parse_generic_type_params(std::vector<std::string>& out_params) {
+    if (!check(TokenType::Less)) return ok_result();
+    advance();  // consume '<'
+
+    if (!check(TokenType::Identifier)) {
+        return make_loc_error<std::monostate>(module_name_, peek().span, "Expected type parameter name");
+    }
+    out_params.push_back(peek().lexeme);
+    advance();
+
+    while (check(TokenType::Comma)) {
+        advance();  // consume ','
+        if (!check(TokenType::Identifier)) {
+            return make_loc_error<std::monostate>(module_name_, peek().span, "Expected type parameter name after ','");
+        }
+        out_params.push_back(peek().lexeme);
+        advance();
+    }
+
+    if (!check(TokenType::Greater)) {
+        return make_loc_error<std::monostate>(module_name_, peek().span, "Expected '>' after type parameters");
+    }
+    advance();  // consume '>'
+    return ok_result();
+}
+
 VoidResult Parser::parse_function_signature(std::vector<Param>& params, std::optional<TypeRef>& return_type) {
     ZEPHYR_TRY(consume(TokenType::LeftParen, "Expected '(' after function name."));
     if (!check(TokenType::RightParen)) {
@@ -418,6 +513,17 @@ RuntimeResult<TypeRef> Parser::parse_type_ref() {
         type.parts.push_back(segment.lexeme);
     }
     return type;
+}
+
+RuntimeResult<std::vector<TypeRef>> Parser::parse_type_arguments() {
+    std::vector<TypeRef> type_arguments;
+    ZEPHYR_TRY(consume(TokenType::Less, "Expected '<' before type arguments."));
+    do {
+        ZEPHYR_TRY_ASSIGN(type_argument, parse_type_ref());
+        type_arguments.push_back(std::move(type_argument));
+    } while (match({TokenType::Comma}));
+    ZEPHYR_TRY(consume(TokenType::Greater, "Expected '>' after type arguments."));
+    return type_arguments;
 }
 
 RuntimeResult<ExprPtr> Parser::parse_expression() { return parse_assignment(); }
@@ -541,7 +647,22 @@ RuntimeResult<ExprPtr> Parser::parse_unary() {
 RuntimeResult<ExprPtr> Parser::parse_call() {
     ZEPHYR_TRY_ASSIGN(expr, parse_primary());
     while (true) {
-        if (match({TokenType::LeftParen})) {
+        if (check(TokenType::Less) && lookahead_generic_call_type_arguments()) {
+            ZEPHYR_TRY_ASSIGN(type_arguments, parse_type_arguments());
+            auto call = std::make_unique<CallExpr>();
+            call->span = peek().span;
+            call->callee = std::move(expr);
+            call->type_arguments = std::move(type_arguments);
+            ZEPHYR_TRY(consume(TokenType::LeftParen, "Expected '(' after type arguments."));
+            if (!check(TokenType::RightParen)) {
+                do {
+                    ZEPHYR_TRY_ASSIGN(argument, parse_expression());
+                    call->arguments.push_back(std::move(argument));
+                } while (match({TokenType::Comma}));
+            }
+            ZEPHYR_TRY(consume(TokenType::RightParen, "Expected ')' after arguments."));
+            expr = std::move(call);
+        } else if (match({TokenType::LeftParen})) {
             auto call = std::make_unique<CallExpr>();
             call->span = previous().span;
             call->callee = std::move(expr);
@@ -563,7 +684,23 @@ RuntimeResult<ExprPtr> Parser::parse_call() {
         } else if (match({TokenType::QuestionDot})) {
             const Span chain_span = previous().span;
             ZEPHYR_TRY_ASSIGN(member_name, consume(TokenType::Identifier, "Expected member name after '?.'."));
-            if (match({TokenType::LeftParen})) {
+            if (check(TokenType::Less) && lookahead_generic_call_type_arguments()) {
+                ZEPHYR_TRY_ASSIGN(type_arguments, parse_type_arguments());
+                auto call = std::make_unique<OptionalCallExpr>();
+                call->span = chain_span;
+                call->object = std::move(expr);
+                call->member = member_name.lexeme;
+                call->type_arguments = std::move(type_arguments);
+                ZEPHYR_TRY(consume(TokenType::LeftParen, "Expected '(' after type arguments."));
+                if (!check(TokenType::RightParen)) {
+                    do {
+                        ZEPHYR_TRY_ASSIGN(argument, parse_expression());
+                        call->arguments.push_back(std::move(argument));
+                    } while (match({TokenType::Comma}));
+                }
+                ZEPHYR_TRY(consume(TokenType::RightParen, "Expected ')' after arguments."));
+                expr = std::move(call);
+            } else if (match({TokenType::LeftParen})) {
                 auto call = std::make_unique<OptionalCallExpr>();
                 call->span = chain_span;
                 call->object = std::move(expr);

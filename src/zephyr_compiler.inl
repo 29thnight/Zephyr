@@ -1,4 +1,4 @@
-﻿// Part of src/zephyr.cpp — included by zephyr.cpp
+// Part of src/zephyr.cpp — included by zephyr.cpp
 enum class BytecodeOp {
     LoadConst,
     LoadLocal,
@@ -726,6 +726,7 @@ struct StructTypeObject final : GcObject {
     void trace(class Runtime&) override {}
 
     std::string name;
+    std::vector<std::string> generic_params;  // e.g., {"T"} for struct Foo<T>
     std::vector<StructFieldSpec> fields;
 };
 
@@ -4584,9 +4585,9 @@ private:
     }
 
     std::shared_ptr<BytecodeFunction> compile_nested_function(const std::string& name, const std::vector<Param>& params, BlockStmt* body,
-                                                              bool is_coroutine_body = false) {
+                                                              bool is_coroutine_body = false, const std::vector<std::string>& generic_params = {}) {
         BytecodeCompiler child(this);
-        return child.compile(name, params, body, is_coroutine_body);
+        return child.compile(name, params, body, is_coroutine_body, generic_params);
     }
 
     void emit_load_symbol(const std::string& name, const Span& span) {
@@ -5166,7 +5167,7 @@ private:
                  stmt,
                  encode_param_metadata(function_decl->params),
                  nullptr,
-                 compile_nested_function(function_decl->name, function_decl->params, function_decl->body.get()));
+                  compile_nested_function(function_decl->name, function_decl->params, function_decl->body.get(), false, function_decl->generic_params));
             if (stmt->exported) {
                 emit_export_name(function_decl->name, function_decl->span);
             }

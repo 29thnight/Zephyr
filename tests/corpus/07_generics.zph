@@ -1,0 +1,18 @@
+fn identity<T>(x: T) -> T { return x; }
+
+fn first<A, B>(a: A, b: B) -> A { return a; }
+
+struct Pair<A, B> {
+    fst: A,
+    snd: B,
+}
+
+fn main() {
+    let x = identity<int>(42);
+    let s = identity<string>("hello");
+    let p = Pair { fst: 1, snd: "two" };
+    let f = first<int, string>(10, "ignored");
+    print(x);
+    print(s);
+    print(f);
+}
