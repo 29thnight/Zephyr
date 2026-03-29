@@ -2419,35 +2419,47 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     } opcode_count_commit{opcode_execution_count_};
 
     std::size_t ip = 0;
-    while (ip < chunk.instructions.size()) {
+    // Cache hot vector data pointers — keeps them in registers, avoids indirection per dispatch.
+    // Register/constant indices are validated by the bytecode compiler; direct access is safe for
+    // trusted (in-process compiled) bytecode.
+    Value* __restrict regs_ptr = regs.data();
+    const CompactInstruction* __restrict instructions_ptr = chunk.instructions.data();
+    const InstructionMetadata* const metadata_ptr = chunk.metadata.data();
+    const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
+    const std::size_t instructions_size = chunk.instructions.size();
+    while (ip < instructions_size) {
         if (gc_stress_enabled_) {
             maybe_run_gc_stress_safe_point();
         }
-        const CompactInstruction& instruction = chunk.instructions[ip];
-        const InstructionMetadata& metadata = chunk.metadata[ip];
-        const Span span = instruction_span(instruction);
+        const CompactInstruction& instruction = instructions_ptr[ip];
         ++opcode_count_commit.delta;
 
         switch (instruction.op) {
             case BytecodeOp::R_LOAD_CONST: {
-                ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
-                ZEPHYR_TRY_ASSIGN(value, load_bytecode_constant(chunk, unpack_r_index_operand(instruction.operand)));
-                regs[dst] = value;
+                const BytecodeConstant& bc = constants_ptr[static_cast<std::size_t>(unpack_r_index_operand(instruction.operand))];
+                if (const auto* iv = std::get_if<std::int64_t>(&bc)) {
+                    regs_ptr[unpack_r_dst_operand(instruction.operand)] = Value::integer(*iv);
+                } else {
+                    ZEPHYR_TRY_ASSIGN(cv, load_bytecode_constant(chunk, unpack_r_index_operand(instruction.operand)));
+                    regs_ptr[unpack_r_dst_operand(instruction.operand)] = cv;
+                }
                 ++ip;
                 break;
             }
             case BytecodeOp::R_LOAD_GLOBAL: {
+                const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                 const int r_gslot = unpack_r_index_operand(instruction.operand);
                 if (!ensure_r_global_binding(r_gslot)) {
                     return make_loc_error<Value>(module.name, span,
                         "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(r_gslot)] + "'.");
                 }
-                regs[dst] = read_binding_value(*reg_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                regs_ptr[dst] = read_binding_value(*reg_global_bindings[static_cast<std::size_t>(r_gslot)]);
                 ++ip;
                 break;
             }
             case BytecodeOp::R_STORE_GLOBAL: {
+                const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
                 const int r_gslot = unpack_r_index_operand(instruction.operand);
                 if (!ensure_r_global_binding(r_gslot)) {
@@ -2461,144 +2473,353 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     return make_loc_error<Value>(module.name, span,
                         "Cannot assign to immutable binding '" + chunk.global_names[rgs] + "'.");
                 }
-                ZEPHYR_TRY(enforce_type(regs[src], binding->type_name, span, module.name, "assignment"));
-                ZEPHYR_TRY(validate_handle_store(regs[src], HandleContainerKind::Global, span, module.name, "global assignment"));
+                ZEPHYR_TRY(enforce_type(regs_ptr[src], binding->type_name, span, module.name, "assignment"));
+                ZEPHYR_TRY(validate_handle_store(regs_ptr[src], HandleContainerKind::Global, span, module.name, "global assignment"));
                 if (binding->cell != nullptr) {
-                    ZEPHYR_TRY(validate_handle_store(regs[src], binding->cell->container_kind, span, module.name, "closure capture assignment"));
+                    ZEPHYR_TRY(validate_handle_store(regs_ptr[src], binding->cell->container_kind, span, module.name, "closure capture assignment"));
                 }
-                write_binding_value(*binding, regs[src]);
-                note_write(owner, regs[src]);
+                write_binding_value(*binding, regs_ptr[src]);
+                note_write(owner, regs_ptr[src]);
                 if (binding->cell != nullptr) {
-                    note_write(static_cast<GcObject*>(binding->cell), regs[src]);
+                    note_write(static_cast<GcObject*>(binding->cell), regs_ptr[src]);
                 }
                 ++ip;
                 break;
             }
             case BytecodeOp::R_MOVE: {
-                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
-                ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                regs[dst] = regs[src];
+                regs_ptr[instruction.dst] = regs_ptr[instruction.src1];
                 ++ip;
                 break;
             }
-            case BytecodeOp::R_ADD:
-            case BytecodeOp::R_SUB:
-            case BytecodeOp::R_MUL:
-            case BytecodeOp::R_DIV:
-            case BytecodeOp::R_MOD:
-            case BytecodeOp::R_LT:
-            case BytecodeOp::R_LE:
-            case BytecodeOp::R_GT:
-            case BytecodeOp::R_GE:
-            case BytecodeOp::R_EQ:
-            case BytecodeOp::R_NE: {
+            // Individual binary op cases — each has its own int fast path, eliminating nested switch overhead.
+            case BytecodeOp::R_ADD: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    std::int64_t ir = 0;
+                    if (try_add_int48(lhs.as_int(), rhs.as_int(), ir)) {
+                        regs_ptr[instruction.dst] = Value::integer(ir);
+                        ++ip; break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                 ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
                 ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
-                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(instruction.op, regs[src1], regs[src2], span));
-                regs[dst] = result;
-                ++ip;
-                break;
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_SUB: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    std::int64_t ir = 0;
+                    if (try_sub_int48(lhs.as_int(), rhs.as_int(), ir)) {
+                        regs_ptr[instruction.dst] = Value::integer(ir);
+                        ++ip; break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_SUB, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_MUL: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    std::int64_t ir = 0;
+                    if (try_mul_int48(lhs.as_int(), rhs.as_int(), ir)) {
+                        regs_ptr[instruction.dst] = Value::integer(ir);
+                        ++ip; break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_MUL, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_DIV: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int() && rhs.as_int() != 0) {
+                    const std::int64_t a = lhs.as_int(), b = rhs.as_int();
+                    regs_ptr[instruction.dst] = Value::integer(a / b);
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_DIV, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_MOD: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int() && rhs.as_int() != 0) {
+                    regs_ptr[instruction.dst] = Value::integer(lhs.as_int() % rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_MOD, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_LT: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() < rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_LT, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_LE: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() <= rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_LE, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_GT: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() > rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_GT, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_GE: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() >= rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_GE, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_EQ: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() == rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_EQ, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
+            }
+            case BytecodeOp::R_NE: {
+                const Value& lhs = regs_ptr[instruction.src1];
+                const Value& rhs = regs_ptr[instruction.src2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    regs_ptr[instruction.dst] = Value::boolean(lhs.as_int() != rhs.as_int());
+                    ++ip; break;
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_NE, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
+                ++ip; break;
             }
             case BytecodeOp::R_NOT: {
-                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
-                ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                regs[dst] = Value::boolean(!is_truthy(regs[src]));
+                regs_ptr[instruction.dst] = Value::boolean(!is_truthy(regs_ptr[instruction.src1]));
                 ++ip;
                 break;
             }
             case BytecodeOp::R_NEG: {
-                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
-                ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                ZEPHYR_TRY_ASSIGN(result, apply_unary_op(TokenType::Minus, regs[src], span, module.name));
-                regs[dst] = result;
+                const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(result, apply_unary_op(TokenType::Minus, regs_ptr[instruction.src1], span, module.name));
+                regs_ptr[instruction.dst] = result;
                 ++ip;
                 break;
             }
-            case BytecodeOp::R_YIELD:
+            case BytecodeOp::R_YIELD: {
+                const Span span = instruction_span(instruction);
                 return make_loc_error<Value>(module.name, span, "yield outside coroutine should be rejected at runtime.");
+            }
             case BytecodeOp::R_CALL: {
+                const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                 ZEPHYR_TRY_ASSIGN(callee, register_index(instruction.src1, span));
                 std::vector<Value> args;
                 args.reserve(instruction.operand_a);
                 for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
                     ZEPHYR_TRY_ASSIGN(arg_reg, register_index(static_cast<std::uint8_t>(instruction.src2 + index), span));
-                    args.push_back(regs[arg_reg]);
+                    args.push_back(regs_ptr[arg_reg]);
                 }
-                ZEPHYR_TRY_ASSIGN(result, call_value(regs[callee], args, span, module.name));
-                regs[dst] = result;
+                ZEPHYR_TRY_ASSIGN(result, call_value(regs_ptr[callee], args, span, module.name));
+                regs_ptr[dst] = result;
                 ++ip;
                 break;
             }
-            case BytecodeOp::R_RETURN: {
-                ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
-                return regs[src];
-            }
+            case BytecodeOp::R_RETURN:
+                return regs_ptr[instruction.src1];
             case BytecodeOp::R_JUMP:
                 ip = static_cast<std::size_t>(instruction.operand);
                 break;
-            case BytecodeOp::R_JUMP_IF_FALSE: {
-                ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
-                if (!is_truthy(regs[src])) {
+            case BytecodeOp::R_JUMP_IF_FALSE:
+                if (!is_truthy(regs_ptr[unpack_r_src_operand(instruction.operand)])) {
                     ip = static_cast<std::size_t>(unpack_r_jump_target_operand(instruction.operand));
                 } else {
                     ++ip;
                 }
                 break;
-            }
-            case BytecodeOp::R_JUMP_IF_TRUE: {
-                ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
-                if (is_truthy(regs[src])) {
+            case BytecodeOp::R_JUMP_IF_TRUE:
+                if (is_truthy(regs_ptr[unpack_r_src_operand(instruction.operand)])) {
                     ip = static_cast<std::size_t>(unpack_r_jump_target_operand(instruction.operand));
                 } else {
                     ++ip;
                 }
                 break;
-            }
             case BytecodeOp::R_SI_ADD_STORE:
             case BytecodeOp::R_SI_SUB_STORE:
             case BytecodeOp::R_SI_MUL_STORE: {
+                const Value& si_lhs = regs_ptr[instruction.src1];
+                const Value& si_rhs = regs_ptr[instruction.src2];
+                if (si_lhs.is_int() && si_rhs.is_int()) {
+                    const std::int64_t a = si_lhs.as_int();
+                    const std::int64_t b = si_rhs.as_int();
+                    // Direct arithmetic fast path — values from as_int() are 48-bit so the
+                    // result fits in int64 without C++ UB. Out-of-range results fall through.
+                    const std::int64_t ir = instruction.op == BytecodeOp::R_SI_ADD_STORE ? a + b
+                                          : instruction.op == BytecodeOp::R_SI_SUB_STORE ? a - b
+                                                                                          : a * b;
+                    if (ir >= Value::kIntMin && ir <= Value::kIntMax) {
+                        regs_ptr[instruction.dst] = Value::integer(ir); ++ip; break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
                 const BytecodeOp fused_op = instruction.op == BytecodeOp::R_SI_ADD_STORE ? BytecodeOp::R_ADD
                                          : instruction.op == BytecodeOp::R_SI_SUB_STORE ? BytecodeOp::R_SUB
                                                                                          : BytecodeOp::R_MUL;
                 ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
                 ZEPHYR_TRY_ASSIGN(src1, register_index(instruction.src1, span));
                 ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
-                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(fused_op, regs[src1], regs[src2], span));
-                regs[dst] = result;
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(fused_op, regs_ptr[src1], regs_ptr[src2], span));
+                regs_ptr[dst] = result; }
                 ++ip;
                 break;
             }
             case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
+                const std::uint8_t cmp_s1 = unpack_r_si_cmp_jump_false_src1(instruction.operand);
+                const std::uint8_t cmp_s2 = unpack_r_si_cmp_jump_false_src2(instruction.operand);
+                const BytecodeOp cmp_op = unpack_r_si_cmp_jump_false_compare_op(instruction.operand);
+                const Value& lhs = regs_ptr[cmp_s1];
+                const Value& rhs = regs_ptr[cmp_s2];
+                if (lhs.is_int() && rhs.is_int()) {
+                    const std::int64_t a = lhs.as_int();
+                    const std::int64_t b = rhs.as_int();
+                    bool cmp_val;
+                    switch (cmp_op) {
+                    case BytecodeOp::R_LT: cmp_val = a < b;  break;
+                    case BytecodeOp::R_LE: cmp_val = a <= b; break;
+                    case BytecodeOp::R_GT: cmp_val = a > b;  break;
+                    case BytecodeOp::R_GE: cmp_val = a >= b; break;
+                    case BytecodeOp::R_EQ: cmp_val = a == b; break;
+                    case BytecodeOp::R_NE: cmp_val = a != b; break;
+                    default:               cmp_val = false;   break;
+                    }
+                    if (cmp_val) {
+                        ++ip;  // Common case: condition true — no metadata access needed.
+                    } else {
+                        // Condition false: load the jump target from metadata.
+                        const InstructionMetadata& metadata = metadata_ptr[ip];
+                        ip = metadata.jump_table.empty()
+                           ? ip + 1
+                           : static_cast<std::size_t>(metadata.jump_table.front());
+                    }
+                    break;
+                }
+                { const InstructionMetadata& metadata = metadata_ptr[ip];
                 if (metadata.jump_table.empty()) {
+                    const Span span = instruction_span(instruction);
                     return make_loc_error<Value>(module.name, span, "Register compare superinstruction is missing jump metadata.");
                 }
-                ZEPHYR_TRY_ASSIGN(src1, register_index(unpack_r_si_cmp_jump_false_src1(instruction.operand), span));
-                ZEPHYR_TRY_ASSIGN(src2, register_index(unpack_r_si_cmp_jump_false_src2(instruction.operand), span));
+                const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(src1, register_index(cmp_s1, span));
+                ZEPHYR_TRY_ASSIGN(src2, register_index(cmp_s2, span));
                 ZEPHYR_TRY_ASSIGN(result,
-                                  binary_fast_or_fallback(unpack_r_si_cmp_jump_false_compare_op(instruction.operand),
-                                                          regs[src1],
-                                                          regs[src2],
-                                                          span));
+                                  binary_fast_or_fallback(cmp_op, regs_ptr[src1], regs_ptr[src2], span));
                 if (!is_truthy(result)) {
                     ip = static_cast<std::size_t>(metadata.jump_table.front());
                 } else {
                     ++ip;
-                }
+                } }
                 break;
             }
             case BytecodeOp::R_SI_LOAD_ADD_STORE: {
-                ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_si_load_add_store_dst(instruction.operand), span));
-                ZEPHYR_TRY_ASSIGN(local_src, register_index(unpack_r_si_load_add_store_local_src(instruction.operand), span));
-                ZEPHYR_TRY_ASSIGN(constant_value, load_bytecode_constant(chunk, unpack_r_si_load_add_store_constant(instruction.operand)));
-                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, regs[local_src], constant_value, span));
-                regs[dst] = result;
+                const std::size_t las_const = unpack_r_si_load_add_store_constant(instruction.operand);
+                const std::uint8_t las_dst = unpack_r_si_load_add_store_dst(instruction.operand);
+                const std::uint8_t las_src = unpack_r_si_load_add_store_local_src(instruction.operand);
+                const BytecodeConstant& bc_const = constants_ptr[las_const];
+                const Value& lhs = regs_ptr[las_src];
+                if (lhs.is_int()) {
+                    if (const auto* iv = std::get_if<std::int64_t>(&bc_const)) {
+                        const std::int64_t sum = lhs.as_int() + *iv;
+                        if (sum >= Value::kIntMin && sum <= Value::kIntMax) {
+                            regs_ptr[las_dst] = Value::integer(sum);
+                            ++ip;
+                            break;
+                        }
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(cv_checked, load_bytecode_constant(chunk, static_cast<int>(las_const)));
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, lhs, cv_checked, span));
+                regs_ptr[las_dst] = result; }
                 ++ip;
                 break;
             }
-            default:
+            default: {
+                const Span span = instruction_span(instruction);
                 return make_loc_error<Value>(module.name, span, "Unsupported opcode in register bytecode executor.");
+            }
         }
     }
 
@@ -4238,10 +4459,425 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_nested_coroutin
     return result;
 }
 
+RuntimeResult<Runtime::CoroutineExecutionResult>
+Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& call_span) {
+    if (coroutine->frames.empty()) {
+        return make_loc_error<CoroutineExecutionResult>("", call_span, "Coroutine frame stack is empty.");
+    }
+    CoroutineFrameState* frame_ptr = &coroutine->frames.front();
+    if (frame_ptr->bytecode == nullptr) {
+        return make_loc_error<CoroutineExecutionResult>(frame_ptr->module_name, call_span, "Coroutine is missing bytecode.");
+    }
+
+    const BytecodeFunction& chunk = *frame_ptr->bytecode;
+    const std::string& module_name = frame_ptr->module_name;
+
+    Value* regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
+        ? frame_ptr->inline_regs
+        : frame_ptr->regs.data();
+
+    const CompactInstruction* __restrict instrs_ptr = chunk.instructions.data();
+    const InstructionMetadata* const metadata_ptr = chunk.metadata.data();
+    const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
+    const std::size_t instrs_count = chunk.instructions.size();
+    std::size_t local_ip = frame_ptr->ip_index;
+    std::size_t executed_steps = 0;
+
+    auto resolve_global_env = [&]() -> Environment* {
+        if (!chunk.global_slots_use_module_root_base) return frame_ptr->current_env;
+        if (frame_ptr->global_resolution_env != nullptr) return frame_ptr->global_resolution_env;
+        return module_or_root_environment(frame_ptr->current_env);
+    };
+
+    auto do_return = [&](const Value& ret_val) -> CoroutineExecutionResult {
+        frame_ptr->ip_index = local_ip + 1;
+        coroutine->suspended = false;
+        unregister_suspended_coroutine(coroutine);
+        coroutine->completed = true;
+        coroutine->started = true;
+        record_coroutine_completed(coroutine);
+        frame_ptr->stack.clear();
+        frame_ptr->locals.clear();
+        frame_ptr->scope_stack.clear();
+        frame_ptr->captured_upvalues.clear();
+        frame_ptr->local_binding_owners.clear();
+        frame_ptr->local_bindings.clear();
+        frame_ptr->local_binding_versions.clear();
+        frame_ptr->global_binding_owners.clear();
+        frame_ptr->global_bindings.clear();
+        frame_ptr->global_binding_versions.clear();
+        frame_ptr->stack_cards.clear();
+        frame_ptr->local_cards.clear();
+        frame_ptr->regs.clear();
+        frame_ptr->reg_cards.clear();
+        frame_ptr->reg_count = 0;
+        frame_ptr->current_env = nullptr;
+        frame_ptr->root_env = nullptr;
+        frame_ptr->ip = 0;
+        frame_ptr->ip_index = 0;
+        return CoroutineExecutionResult{false, ret_val, executed_steps};
+    };
+
+    while (local_ip < instrs_count) {
+        if (gc_stress_enabled_) {
+            maybe_run_gc_stress_safe_point();
+            frame_ptr = &coroutine->frames.front();
+            regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
+                ? frame_ptr->inline_regs : frame_ptr->regs.data();
+        }
+        const CompactInstruction& instr = instrs_ptr[local_ip];
+        ++executed_steps;
+        ++opcode_execution_count_;
+
+        switch (instr.op) {
+        case BytecodeOp::R_LOAD_CONST: {
+            const int lc_idx = unpack_r_index_operand(instr.operand);
+            const BytecodeConstant& bc = constants_ptr[static_cast<std::size_t>(lc_idx)];
+            if (const auto* iv = std::get_if<std::int64_t>(&bc)) {
+                regs_ptr[unpack_r_dst_operand(instr.operand)] = Value::integer(*iv);
+            } else {
+                ZEPHYR_TRY_ASSIGN(cv, load_bytecode_constant(chunk, lc_idx));
+                regs_ptr[unpack_r_dst_operand(instr.operand)] = cv;
+            }
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_LOAD_GLOBAL: {
+            const int slot = unpack_r_index_operand(instr.operand);
+            bool found = false;
+            for (Environment* env = resolve_global_env(); env != nullptr; env = env->parent) {
+                auto it = env->values.find(chunk.global_names[static_cast<std::size_t>(slot)]);
+                if (it != env->values.end()) {
+                    regs_ptr[unpack_r_dst_operand(instr.operand)] = read_binding_value(it->second);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return make_loc_error<CoroutineExecutionResult>(
+                    module_name, instruction_span(instr),
+                    "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(slot)] + "'.");
+            }
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_STORE_GLOBAL: {
+            const Span span = instruction_span(instr);
+            const int slot = unpack_r_index_operand(instr.operand);
+            bool found = false;
+            for (Environment* env = resolve_global_env(); env != nullptr; env = env->parent) {
+                auto it = env->values.find(chunk.global_names[static_cast<std::size_t>(slot)]);
+                if (it != env->values.end()) {
+                    Binding* binding = &it->second;
+                    if (!binding->mutable_value) {
+                        return make_loc_error<CoroutineExecutionResult>(
+                            module_name, span,
+                            "Cannot assign to immutable binding '" + chunk.global_names[static_cast<std::size_t>(slot)] + "'.");
+                    }
+                    ZEPHYR_TRY(enforce_type(regs_ptr[instr.src1], binding->type_name, span, module_name, "assignment"));
+                    ZEPHYR_TRY(validate_handle_store(regs_ptr[instr.src1], HandleContainerKind::Global, span, module_name, "global assignment"));
+                    if (binding->cell != nullptr) {
+                        ZEPHYR_TRY(validate_handle_store(regs_ptr[instr.src1], binding->cell->container_kind,
+                                                          span, module_name, "coroutine capture assignment"));
+                    }
+                    write_binding_value(*binding, regs_ptr[instr.src1]);
+                    note_write(env, regs_ptr[instr.src1]);
+                    if (binding->cell != nullptr) {
+                        note_write(static_cast<GcObject*>(binding->cell), regs_ptr[instr.src1]);
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return make_loc_error<CoroutineExecutionResult>(
+                    module_name, span,
+                    "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(slot)] + "'.");
+            }
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_MOVE: {
+            regs_ptr[instr.dst] = regs_ptr[instr.src1];
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_ADD: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() + rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Plus, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SUB: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() - rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Minus, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_MUL: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() * rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Star, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_DIV: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int() && rv.as_int() != 0) { regs_ptr[instr.dst] = Value::integer(lv.as_int() / rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Slash, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_MOD: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int() && rv.as_int() != 0) { regs_ptr[instr.dst] = Value::integer(lv.as_int() % rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Percent, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_LT: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() < rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Less, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_LE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() <= rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::LessEqual, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_GT: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() > rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Greater, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_GE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() >= rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::GreaterEqual, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_EQ: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() == rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::EqualEqual, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_NE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) { regs_ptr[instr.dst] = Value::boolean(lv.as_int() != rv.as_int()); ++local_ip; break; }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::BangEqual, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_NOT: {
+            regs_ptr[instr.dst] = Value::boolean(!is_truthy(regs_ptr[instr.src1]));
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_NEG: {
+            const Span s = instruction_span(instr);
+            ZEPHYR_TRY_ASSIGN(r, apply_unary_op(TokenType::Minus, regs_ptr[instr.src1], s, module_name));
+            regs_ptr[instr.dst] = r;
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_CALL: {
+            const Span span = instruction_span(instr);
+            const std::size_t dst = instr.dst;
+            const Value callee_value = regs_ptr[instr.src1];
+            std::vector<Value> args;
+            args.reserve(instr.operand_a);
+            for (std::uint8_t idx = 0; idx < instr.operand_a; ++idx) {
+                args.push_back(regs_ptr[static_cast<std::size_t>(instr.src2 + idx)]);
+            }
+            if (callee_value.is_object() && callee_value.as_object()->kind == ObjectKind::ScriptFunction) {
+                ++local_ip;
+                frame_ptr->ip_index = local_ip;
+                Environment* saved_root_env = frame_ptr->root_env;
+                ModuleRecord temp_module;
+                temp_module.name = module_name;
+                temp_module.environment = saved_root_env;
+                ZEPHYR_TRY(push_coroutine_script_frame(
+                    coroutine, static_cast<ScriptFunctionObject*>(callee_value.as_object()), args, span, module_name));
+                frame_ptr = &coroutine->frames.front();
+                regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
+                    ? frame_ptr->inline_regs : frame_ptr->regs.data();
+                ZEPHYR_TRY_ASSIGN(nested_result, resume_nested_coroutine_frame(coroutine, temp_module, span));
+                executed_steps += nested_result.step_count;
+                frame_ptr = &coroutine->frames.front();
+                regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
+                    ? frame_ptr->inline_regs : frame_ptr->regs.data();
+                if (nested_result.yielded) {
+                    frame_ptr->pending_call_dst_reg = dst;
+                    nested_result.step_count = executed_steps;
+                    return nested_result;
+                }
+                regs_ptr[dst] = nested_result.value;
+                break;
+            }
+            ZEPHYR_TRY_ASSIGN(result, call_value(callee_value, args, span, module_name));
+            regs_ptr[dst] = result;
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_JUMP:
+            local_ip = static_cast<std::size_t>(instr.operand);
+            break;
+        case BytecodeOp::R_JUMP_IF_FALSE: {
+            const std::size_t src = static_cast<std::size_t>(unpack_r_src_operand(instr.operand));
+            if (!is_truthy(regs_ptr[src])) {
+                local_ip = static_cast<std::size_t>(unpack_r_jump_target_operand(instr.operand));
+            } else {
+                ++local_ip;
+            }
+            break;
+        }
+        case BytecodeOp::R_JUMP_IF_TRUE: {
+            const std::size_t src = static_cast<std::size_t>(unpack_r_src_operand(instr.operand));
+            if (is_truthy(regs_ptr[src])) {
+                local_ip = static_cast<std::size_t>(unpack_r_jump_target_operand(instr.operand));
+            } else {
+                ++local_ip;
+            }
+            break;
+        }
+        case BytecodeOp::R_SI_ADD_STORE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() + rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Plus, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SI_SUB_STORE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() - rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Minus, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SI_MUL_STORE: {
+            const Value& lv = regs_ptr[instr.src1]; const Value& rv = regs_ptr[instr.src2];
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t ir = lv.as_int() * rv.as_int();
+                if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(ir); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Star, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
+            const BytecodeOp cmp_op = unpack_r_si_cmp_jump_false_compare_op(instr.operand);
+            const std::uint8_t s1 = unpack_r_si_cmp_jump_false_src1(instr.operand);
+            const std::uint8_t s2 = unpack_r_si_cmp_jump_false_src2(instr.operand);
+            const Value& lv = regs_ptr[s1]; const Value& rv = regs_ptr[s2];
+            bool int_handled = false;
+            if (lv.is_int() && rv.is_int()) {
+                const std::int64_t a = lv.as_int(), b = rv.as_int();
+                bool cond = false;
+                bool valid_op = true;
+                switch (cmp_op) {
+                case BytecodeOp::R_LT: cond = a < b; break;
+                case BytecodeOp::R_LE: cond = a <= b; break;
+                case BytecodeOp::R_GT: cond = a > b; break;
+                case BytecodeOp::R_GE: cond = a >= b; break;
+                case BytecodeOp::R_EQ: cond = a == b; break;
+                case BytecodeOp::R_NE: cond = a != b; break;
+                default: valid_op = false; break;
+                }
+                if (valid_op) {
+                    if (cond) { ++local_ip; } else { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+                    int_handled = true;
+                }
+            }
+            if (!int_handled) {
+                const Span span = instruction_span(instr);
+                if (metadata_ptr[local_ip].jump_table.empty()) {
+                    return make_loc_error<CoroutineExecutionResult>(module_name, span,
+                        "Register compare superinstruction is missing jump metadata.");
+                }
+                TokenType token = TokenType::Less;
+                switch (cmp_op) {
+                case BytecodeOp::R_LT: token = TokenType::Less; break;
+                case BytecodeOp::R_LE: token = TokenType::LessEqual; break;
+                case BytecodeOp::R_GT: token = TokenType::Greater; break;
+                case BytecodeOp::R_GE: token = TokenType::GreaterEqual; break;
+                case BytecodeOp::R_EQ: token = TokenType::EqualEqual; break;
+                case BytecodeOp::R_NE: token = TokenType::BangEqual; break;
+                default:
+                    return make_loc_error<CoroutineExecutionResult>(module_name, span, "Invalid compare op in R_SI_CMP_JUMP_FALSE.");
+                }
+                ZEPHYR_TRY_ASSIGN(cmp_result, apply_binary_op(token, lv, rv, span, module_name));
+                if (!is_truthy(cmp_result)) { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+                else { ++local_ip; }
+            }
+            break;
+        }
+        case BytecodeOp::R_SI_LOAD_ADD_STORE: {
+            const std::uint8_t las_dst = unpack_r_si_load_add_store_dst(instr.operand);
+            const std::uint8_t las_src = unpack_r_si_load_add_store_local_src(instr.operand);
+            const int las_const = unpack_r_si_load_add_store_constant(instr.operand);
+            const Value& src_val = regs_ptr[las_src];
+            const BytecodeConstant& bc_las = constants_ptr[static_cast<std::size_t>(las_const)];
+            if (src_val.is_int()) {
+                if (const auto* iv = std::get_if<std::int64_t>(&bc_las)) {
+                    const std::int64_t ir = src_val.as_int() + *iv;
+                    if (ir >= Value::kIntMin && ir <= Value::kIntMax) { regs_ptr[las_dst] = Value::integer(ir); ++local_ip; break; }
+                }
+            }
+            { const Span s = instruction_span(instr);
+              ZEPHYR_TRY_ASSIGN(cv, load_bytecode_constant(chunk, las_const));
+              ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Plus, src_val, cv, s, module_name));
+              regs_ptr[las_dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_YIELD: {
+            const Value yield_value = regs_ptr[instr.src1];
+            const Span span = instruction_span(instr);
+            ZEPHYR_TRY(validate_handle_store(yield_value, HandleContainerKind::CoroutineFrame, span, module_name, "coroutine yield"));
+            frame_ptr->ip_index = local_ip + 1;
+            coroutine->suspended = true;
+            compact_suspended_coroutine(coroutine);
+            register_suspended_coroutine(coroutine);
+            record_coroutine_trace_event(CoroutineTraceEvent::Type::Yielded, coroutine);
+            return CoroutineExecutionResult{true, yield_value, executed_steps};
+        }
+        case BytecodeOp::R_RETURN: {
+            const Value ret_value = regs_ptr[instr.src1];
+            const Span span = instruction_span(instr);
+            ZEPHYR_TRY(enforce_type(ret_value, frame_ptr->return_type_name, span, module_name, "coroutine return"));
+            return do_return(ret_value);
+        }
+        default: {
+            const Span span = instruction_span(instr);
+            return make_loc_error<CoroutineExecutionResult>(module_name, span,
+                "Unsupported opcode in register coroutine fast executor.");
+        }
+        }
+    }
+
+    return do_return(Value::nil());
+}
+
 RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_bytecode(CoroutineObject* coroutine, ModuleRecord& module,
                                                                                     const Span& call_span) {
     if (coroutine->frames.empty()) {
         return make_loc_error<CoroutineExecutionResult>(module.name, call_span, "Coroutine frame stack is empty.");
+    }
+
+    // Fast path: single-frame register-mode coroutine — skip full single-frame setup
+    if (coroutine->frames.size() == 1 && coroutine->frames[0].uses_register_mode) {
+        return resume_register_coroutine_fast(coroutine, call_span);
     }
 
     // Fast path: single-frame coroutine (most common case — no nested calls)
@@ -7335,6 +7971,47 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
         root.ip = 0;
         root.ip_index = 0;
         coroutine->started = true;
+    }
+
+    // Step 2 fast path: already-started single-frame register-mode coroutine —
+    // skip fake_module construction (string copy) and resume_coroutine_bytecode overhead.
+    if (coroutine->frames.size() == 1 && coroutine->frames[0].uses_register_mode) {
+        ScopedVectorPush<CoroutineObject> fast_active(active_coroutines_, coroutine);
+        auto fast_result = resume_register_coroutine_fast(coroutine, span);
+        if (!fast_result) {
+            const std::string error_with_trace = append_coroutine_stack_trace(std::move(fast_result.error()), coroutine);
+            unregister_suspended_coroutine(coroutine);
+            coroutine->completed = true;
+            coroutine->suspended = false;
+            record_coroutine_completed(coroutine);
+            coroutine->last_resume_step_count = 0;
+            auto& reset_root = coroutine->frames.front();
+            reset_root.stack.clear();
+            reset_root.locals.clear();
+            reset_root.captured_upvalues.clear();
+            reset_root.local_binding_owners.clear();
+            reset_root.local_bindings.clear();
+            reset_root.local_binding_versions.clear();
+            reset_root.global_binding_owners.clear();
+            reset_root.global_bindings.clear();
+            reset_root.global_binding_versions.clear();
+            reset_root.scope_stack.clear();
+            reset_root.regs.clear();
+            reset_root.reg_cards.clear();
+            reset_root.reg_count = 0;
+            reset_root.current_env = nullptr;
+            reset_root.root_env = nullptr;
+            reset_root.ip = 0;
+            reset_root.ip_index = 0;
+            return std::unexpected(error_with_trace);
+        }
+        coroutine->last_resume_step_count = fast_result->step_count;
+        coroutine->total_step_count += fast_result->step_count;
+        coroutine->max_resume_step_count = std::max(coroutine->max_resume_step_count, fast_result->step_count);
+        if (fast_result->yielded) {
+            ++coroutine->yield_count;
+        }
+        return fast_result->value;
     }
 
     ModuleRecord fake_module;

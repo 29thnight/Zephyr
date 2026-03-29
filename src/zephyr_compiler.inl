@@ -3114,6 +3114,7 @@ private:
                                                    ModuleRecord& module, const Span& call_span,
                                                    const std::vector<UpvalueCellObject*>* captured_upvalues,
                                                    const std::vector<Value>* call_args);
+    RuntimeResult<CoroutineExecutionResult> resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& call_span);
     RuntimeResult<CoroutineExecutionResult> resume_coroutine_single_frame(CoroutineObject* coroutine, ModuleRecord& module, const Span& call_span);
     RuntimeResult<CoroutineExecutionResult> resume_coroutine_bytecode(CoroutineObject* coroutine, ModuleRecord& module, const Span& call_span);
     RuntimeResult<CoroutineExecutionResult> resume_nested_coroutine_frame(CoroutineObject* coroutine, ModuleRecord& module, const Span& call_span);
