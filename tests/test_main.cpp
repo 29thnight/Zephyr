@@ -93,6 +93,11 @@ int main() {
         test_wave_l_array_pattern();
         test_wave_l_struct_pattern();
         test_wave_l_nested_pattern();
+        test_named_import();
+        test_re_export();
+        test_circular_import_error();
+        test_std_math();
+        test_std_string();
         std::cout << "all tests passed" << std::endl;
         return 0;
     } catch (const std::exception& error) {

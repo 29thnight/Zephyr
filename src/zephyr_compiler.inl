@@ -3257,6 +3257,7 @@ private:
     std::filesystem::path resolve_import_path(const std::filesystem::path& base_dir, const std::string& path) const;
     RuntimeResult<ModuleRecord*> import_module(const std::filesystem::path& base_dir, const std::string& specifier);
     VoidResult import_exports(Environment* environment, ModuleRecord& imported, std::optional<std::string> alias,
+                              const std::vector<std::string>& named_pairs,
                               const std::string& module_name, const Span& span);
     RuntimeResult<std::unique_ptr<Program>> parse_source(const std::string& source, const std::string& module_name);
     VoidResult check_program_recursive(const std::string& module_name, const std::filesystem::path& base_dir, Program& program,
@@ -5101,7 +5102,37 @@ private:
 
     void compile_stmt(Stmt* stmt) {
         if (auto* import_stmt = dynamic_cast<ImportStmt*>(stmt)) {
-            emit(BytecodeOp::ImportModule, import_stmt->span, 0, import_stmt->path, import_stmt->alias);
+            // Build named-pairs vector: [exported1, local1, exported2, local2, ...]
+            std::vector<std::string> named_pairs;
+            for (const auto& item : import_stmt->named) {
+                named_pairs.push_back(item.name);
+                named_pairs.push_back(item.local_name);
+            }
+            emit(BytecodeOp::ImportModule, import_stmt->span, 0, import_stmt->path, import_stmt->alias,
+                 false, nullptr, nullptr, std::move(named_pairs));
+            return;
+        }
+        if (auto* re_export = dynamic_cast<ReExportStmt*>(stmt)) {
+            if (!re_export->path.empty()) {
+                // Re-export from another module: import namespace to temp, then extract each item
+                const std::string ns_alias = "__reexport_ns_" + std::to_string(temp_counter_++);
+                emit(BytecodeOp::ImportModule, re_export->span, 0, re_export->path, ns_alias);
+                for (const auto& item : re_export->items) {
+                    emit(BytecodeOp::LoadName, re_export->span, -1, ns_alias);
+                    emit(BytecodeOp::LoadMember, re_export->span, 0, item.name);
+                    emit(BytecodeOp::DefineName, re_export->span, -1, item.exported_as);
+                    emit(BytecodeOp::ExportName, re_export->span, 0, item.exported_as);
+                }
+            } else {
+                // Local re-export: items are already in scope
+                for (const auto& item : re_export->items) {
+                    if (item.name != item.exported_as) {
+                        emit(BytecodeOp::LoadName, re_export->span, -1, item.name);
+                        emit(BytecodeOp::DefineName, re_export->span, -1, item.exported_as);
+                    }
+                    emit(BytecodeOp::ExportName, re_export->span, 0, item.exported_as);
+                }
+            }
             return;
         }
         if (auto* let_stmt = dynamic_cast<LetStmt*>(stmt)) {

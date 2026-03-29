@@ -214,5 +214,10 @@ void test_wave_l_result_question_op();
 void test_wave_l_array_pattern();
 void test_wave_l_struct_pattern();
 void test_wave_l_nested_pattern();
+void test_named_import();
+void test_re_export();
+void test_circular_import_error();
+void test_std_math();
+void test_std_string();
 
 }  // namespace zephyr_tests

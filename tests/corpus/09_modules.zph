@@ -1,0 +1,28 @@
+// 09_modules.zph - Module system test
+// This file tests named imports and std modules.
+
+import { floor, sqrt, clamp, pi } from "std/math";
+import { upper, contains, len } from "std/string";
+
+fn test_math() {
+    let x = floor(3.9);
+    assert(x == 3.0);
+    let s = sqrt(9.0);
+    assert(s == 3.0);
+    let c = clamp(10.0, 0.0, 5.0);
+    assert(c == 5.0);
+    assert(pi > 3.0);
+}
+
+fn test_strings() {
+    let s = "Hello World";
+    assert(upper(s) == "HELLO WORLD");
+    assert(contains(s, "World") == true);
+    assert(len(s) == 11);
+}
+
+fn main() {
+    test_math();
+    test_strings();
+    print("ok");
+}

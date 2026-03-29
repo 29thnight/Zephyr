@@ -1329,4 +1329,161 @@ void test_wave_l_nested_pattern() {
     require(err_r.is_int() && err_r.as_int() == -1, "wave_l_nested: Err should give -1");
 }
 
+void test_named_import() {
+    const auto base_dir = std::filesystem::current_path() / "tmp_named_import_test";
+    std::filesystem::remove_all(base_dir);
+    std::filesystem::create_directories(base_dir);
+
+    const auto lib_path  = base_dir / "lib.zph";
+    const auto main_path = base_dir / "main.zph";
+    {
+        std::ofstream out(lib_path);
+        out << "export let foo: Int = 42;\nexport let bar: Int = 7;\n";
+    }
+    {
+        std::ofstream out(main_path);
+        out << "import { foo } from \"lib.zph\";\n"
+               "export fn get_foo() -> Int { return foo; }\n";
+    }
+
+    zephyr::ZephyrVM vm;
+    vm.execute_file(main_path);
+
+    const auto module_name = std::filesystem::weakly_canonical(main_path).string();
+    const auto h = vm.get_function(module_name, "get_foo");
+    require(h.has_value(), "named_import: missing get_foo handle");
+    const auto result = vm.call(*h);
+    require(result.is_int() && result.as_int() == 42, "named_import: expected foo==42");
+
+    std::filesystem::remove_all(base_dir);
+}
+
+void test_re_export() {
+    const auto base_dir = std::filesystem::current_path() / "tmp_re_export_test";
+    std::filesystem::remove_all(base_dir);
+    std::filesystem::create_directories(base_dir);
+
+    const auto lib_path    = base_dir / "lib.zph";
+    const auto middle_path = base_dir / "middle.zph";
+    const auto main_path   = base_dir / "main.zph";
+    {
+        std::ofstream out(lib_path);
+        out << "export let foo: Int = 99;\n";
+    }
+    {
+        std::ofstream out(middle_path);
+        out << "export { foo } from \"lib.zph\";\n";
+    }
+    {
+        std::ofstream out(main_path);
+        out << "import { foo } from \"middle.zph\";\n"
+               "export fn get_foo() -> Int { return foo; }\n";
+    }
+
+    zephyr::ZephyrVM vm;
+    vm.execute_file(main_path);
+
+    const auto module_name = std::filesystem::weakly_canonical(main_path).string();
+    const auto h = vm.get_function(module_name, "get_foo");
+    require(h.has_value(), "re_export: missing get_foo handle");
+    const auto result = vm.call(*h);
+    require(result.is_int() && result.as_int() == 99, "re_export: expected foo==99");
+
+    std::filesystem::remove_all(base_dir);
+}
+
+void test_circular_import_error() {
+    const auto temp_dir = std::filesystem::current_path() / "tmp_circular_runtime_test";
+    std::filesystem::remove_all(temp_dir);
+    std::filesystem::create_directories(temp_dir);
+
+    const auto a_path = temp_dir / "a.zph";
+    const auto b_path = temp_dir / "b.zph";
+    {
+        std::ofstream out(a_path);
+        out << "import \"b.zph\";\nlet x: Int = 1;\n";
+    }
+    {
+        std::ofstream out(b_path);
+        out << "import \"a.zph\";\nlet y: Int = 2;\n";
+    }
+
+    bool rejected = false;
+    try {
+        zephyr::ZephyrVM vm;
+        vm.execute_file(a_path);
+    } catch (const std::exception& error) {
+        rejected = true;
+        const std::string message = error.what();
+        require(message.find("circular") != std::string::npos ||
+                message.find("Circular") != std::string::npos ||
+                message.find("already loading") != std::string::npos,
+                "circular_import: should report circular import");
+    }
+
+    std::filesystem::remove_all(temp_dir);
+    require(rejected, "circular_import: runtime should reject circular imports");
+}
+
+void test_std_math() {
+    zephyr::ZephyrVM vm;
+
+    vm.execute_string(
+        R"(
+            import { floor, sqrt, clamp, pi, min, max, pow, abs } from "std/math";
+
+            export fn check_floor() -> Bool { return floor(3.9) == 3.0; }
+            export fn check_sqrt()  -> Bool { return sqrt(4.0) == 2.0; }
+            export fn check_pi()    -> Bool { return pi > 3.14; }
+            export fn check_clamp() -> Bool { return clamp(10.0, 0.0, 5.0) == 5.0; }
+            export fn check_min()   -> Bool { return min(3.0, 7.0) == 3.0; }
+            export fn check_max()   -> Bool { return max(3.0, 7.0) == 7.0; }
+            export fn check_abs()   -> Bool { return abs(-4.0) == 4.0; }
+            export fn check_pow()   -> Bool { return pow(2.0, 3.0) == 8.0; }
+        )",
+        "unit_std_math",
+        std::filesystem::current_path());
+
+    const auto tests = std::vector<std::string>{"check_floor", "check_sqrt", "check_pi",
+                                                 "check_clamp", "check_min",  "check_max",
+                                                 "check_abs",   "check_pow"};
+    for (const auto& fn_name : tests) {
+        const auto h = vm.get_function("unit_std_math", fn_name);
+        require(h.has_value(), "std_math: missing handle for " + fn_name);
+        const auto result = vm.call(*h);
+        require(result.is_bool() && result.as_bool(), "std_math: " + fn_name + " returned false");
+    }
+}
+
+void test_std_string() {
+    zephyr::ZephyrVM vm;
+
+    vm.execute_string(
+        R"(
+            import { upper, lower, contains, len, starts_with, ends_with, trim, replace, substr } from "std/string";
+
+            export fn check_upper()       -> Bool { return upper("hello") == "HELLO"; }
+            export fn check_lower()       -> Bool { return lower("WORLD") == "world"; }
+            export fn check_contains()    -> Bool { return contains("hello world", "world") == true; }
+            export fn check_len()         -> Bool { return len("abc") == 3; }
+            export fn check_starts_with() -> Bool { return starts_with("zephyr", "zep") == true; }
+            export fn check_ends_with()   -> Bool { return ends_with("zephyr", "hyr") == true; }
+            export fn check_trim()        -> Bool { return trim("  hi  ") == "hi"; }
+            export fn check_replace()     -> Bool { return replace("hello", "l", "r") == "herro"; }
+            export fn check_substr()      -> Bool { return substr("hello", 1, 3) == "ell"; }
+        )",
+        "unit_std_string",
+        std::filesystem::current_path());
+
+    const auto tests = std::vector<std::string>{"check_upper",  "check_lower",       "check_contains",
+                                                 "check_len",    "check_starts_with", "check_ends_with",
+                                                 "check_trim",   "check_replace",     "check_substr"};
+    for (const auto& fn_name : tests) {
+        const auto h = vm.get_function("unit_std_string", fn_name);
+        require(h.has_value(), "std_string: missing handle for " + fn_name);
+        const auto result = vm.call(*h);
+        require(result.is_bool() && result.as_bool(), "std_string: " + fn_name + " returned false");
+    }
+}
+
 }  // namespace zephyr_tests

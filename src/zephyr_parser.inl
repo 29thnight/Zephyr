@@ -154,6 +154,34 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_declaration() {
         exported = true;
     }
 
+    // Re-export: export { foo, bar as baz } from "path"; OR export { foo };
+    if (exported && check(TokenType::LeftBrace)) {
+        advance();  // consume '{'
+        auto re_export = std::make_unique<ReExportStmt>();
+        re_export->span = previous().span;
+        while (!check(TokenType::RightBrace) && !is_at_end()) {
+            ZEPHYR_TRY_ASSIGN(name_tok, consume(TokenType::Identifier, "Expected name in export list."));
+            ReExportItem item;
+            item.name = name_tok.lexeme;
+            item.exported_as = name_tok.lexeme;
+            if (match({TokenType::KeywordAs})) {
+                ZEPHYR_TRY_ASSIGN(alias_tok, consume(TokenType::Identifier, "Expected name after 'as'."));
+                item.exported_as = alias_tok.lexeme;
+            }
+            re_export->items.push_back(std::move(item));
+            if (!match({TokenType::Comma})) {
+                break;
+            }
+        }
+        ZEPHYR_TRY(consume(TokenType::RightBrace, "Expected '}' after export list."));
+        if (match({TokenType::KeywordFrom})) {
+            ZEPHYR_TRY_ASSIGN(path_tok, consume(TokenType::String, "Expected path after 'from'."));
+            re_export->path = path_tok.lexeme;
+        }
+        ZEPHYR_TRY(consume(TokenType::Semicolon, "Expected ';' after export."));
+        return re_export;
+    }
+
     std::unique_ptr<Stmt> stmt;
     if (match({TokenType::KeywordImport})) {
         ZEPHYR_TRY_ASSIGN(import_stmt, parse_import());
@@ -182,6 +210,33 @@ RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_declaration() {
 }
 
 RuntimeResult<std::unique_ptr<Stmt>> Parser::parse_import() {
+    // Named import: import { foo, bar as b } from "path";
+    if (check(TokenType::LeftBrace)) {
+        advance();  // consume '{'
+        auto stmt = std::make_unique<ImportStmt>();
+        stmt->span = previous().span;
+        while (!check(TokenType::RightBrace) && !is_at_end()) {
+            ZEPHYR_TRY_ASSIGN(name_tok, consume(TokenType::Identifier, "Expected export name in import list."));
+            ImportNameItem item;
+            item.name = name_tok.lexeme;
+            item.local_name = name_tok.lexeme;
+            if (match({TokenType::KeywordAs})) {
+                ZEPHYR_TRY_ASSIGN(alias_tok, consume(TokenType::Identifier, "Expected local name after 'as'."));
+                item.local_name = alias_tok.lexeme;
+            }
+            stmt->named.push_back(std::move(item));
+            if (!match({TokenType::Comma})) {
+                break;
+            }
+        }
+        ZEPHYR_TRY(consume(TokenType::RightBrace, "Expected '}' after import list."));
+        ZEPHYR_TRY(consume(TokenType::KeywordFrom, "Expected 'from' after import list."));
+        ZEPHYR_TRY_ASSIGN(path_token, consume(TokenType::String, "Expected string path after 'from'."));
+        stmt->path = path_token.lexeme;
+        ZEPHYR_TRY(consume(TokenType::Semicolon, "Expected ';' after import."));
+        return stmt;
+    }
+    // Whole-namespace import: import "path" (as alias)?;
     ZEPHYR_TRY_ASSIGN(path_token, consume(TokenType::String, "Expected string literal after import."));
     auto stmt = std::make_unique<ImportStmt>();
     stmt->span = path_token.span;

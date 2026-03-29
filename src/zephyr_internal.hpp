@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <deque>
 #include <cmath>
 #include <cstdlib>
 #include <expected>
@@ -263,6 +264,8 @@ enum class TokenType {
     RightBracket,
     Comma,
     Dot,
+    DotDot,
+    DotDotEqual,
     Semicolon,
     Colon,
     DoubleColon,
@@ -285,6 +288,7 @@ enum class TokenType {
     LessEqual,
     Greater,
     GreaterEqual,
+    Question,
     QuestionDot,
     Pipe,
     AndAnd,
@@ -311,6 +315,7 @@ enum class TokenType {
     KeywordImport,
     KeywordExport,
     KeywordAs,
+    KeywordFrom,
     KeywordTrue,
     KeywordFalse,
     KeywordNil,

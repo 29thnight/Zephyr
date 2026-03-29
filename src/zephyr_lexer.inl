@@ -403,7 +403,8 @@ private:
             {"continue", TokenType::KeywordContinue},   {"return", TokenType::KeywordReturn},
             {"struct", TokenType::KeywordStruct},       {"enum", TokenType::KeywordEnum},           {"match", TokenType::KeywordMatch},
             {"import", TokenType::KeywordImport},       {"export", TokenType::KeywordExport},       {"as", TokenType::KeywordAs},
-            {"true", TokenType::KeywordTrue},           {"false", TokenType::KeywordFalse},         {"nil", TokenType::KeywordNil},
+            {"from", TokenType::KeywordFrom},
+            {"true", TokenType::KeywordTrue},{"false", TokenType::KeywordFalse},         {"nil", TokenType::KeywordNil},
         };
 
         const auto it = keywords.find(value);
@@ -744,9 +745,25 @@ struct ImplDecl final : Stmt {
     std::vector<std::unique_ptr<FunctionDecl>> methods;
 };
 
+struct ImportNameItem {
+    std::string name;        // exported name in source module
+    std::string local_name;  // local binding (may differ via 'as')
+};
+
 struct ImportStmt final : Stmt {
     std::string path;
-    std::optional<std::string> alias;
+    std::optional<std::string> alias;        // import "p" as alias
+    std::vector<ImportNameItem> named;       // import { foo, bar as b } from "p"
+};
+
+struct ReExportItem {
+    std::string name;
+    std::string exported_as;  // same as name if no 'as'
+};
+
+struct ReExportStmt final : Stmt {
+    std::string path;         // empty if not 're-export from'
+    std::vector<ReExportItem> items;
 };
 
 struct Program {

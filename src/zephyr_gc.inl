@@ -4061,7 +4061,7 @@ RuntimeResult<Value> Runtime::execute_bytecode_chunk(const BytecodeFunction& chu
                 ZEPHYR_TRY_ASSIGN(imported,
                                   import_module(module.path.empty() ? std::filesystem::current_path() : module.path.parent_path(),
                                                 metadata.string_operand));
-                ZEPHYR_TRY(import_exports(current_env, *imported, metadata.type_name, module.name, span));
+                ZEPHYR_TRY(import_exports(current_env, *imported, metadata.type_name, metadata.names, module.name, span));
                 ++ip;
                 break;
             }
@@ -6076,7 +6076,7 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                 ZEPHYR_TRY_ASSIGN(imported,
                                   import_module(module.path.empty() ? std::filesystem::current_path() : module.path.parent_path(),
                                                 metadata.string_operand));
-                ZEPHYR_TRY(import_exports(current_frame.current_env, *imported, metadata.type_name, module.name, span));
+                ZEPHYR_TRY(import_exports(current_frame.current_env, *imported, metadata.type_name, metadata.names, module.name, span));
                 ++current_frame.ip;
                 break;
             }
@@ -6479,6 +6479,11 @@ RuntimeResult<ModuleRecord*> Runtime::load_host_module(const std::string& module
 }
 
 RuntimeResult<ModuleRecord*> Runtime::import_module(const std::filesystem::path& base_dir, const std::string& specifier) {
+    // Registered host modules take priority over file-based resolution.
+    // This allows built-in std/math and std/string to override on-disk stubs.
+    if (host_modules_.count(specifier) > 0) {
+        return load_host_module(specifier);
+    }
     const auto resolved = resolve_import_path(base_dir, specifier);
     if (path_like(specifier) || std::filesystem::exists(resolved)) {
         return load_file_record(resolved);
@@ -6487,9 +6492,24 @@ RuntimeResult<ModuleRecord*> Runtime::import_module(const std::filesystem::path&
 }
 
 VoidResult Runtime::import_exports(Environment* environment, ModuleRecord& imported, std::optional<std::string> alias,
+                                   const std::vector<std::string>& named_pairs,
                                    const std::string& module_name, const Span& span) {
     if (alias.has_value()) {
         define_value(environment, *alias, Value::object(imported.namespace_object), false);
+        return ok_result();
+    }
+
+    if (!named_pairs.empty()) {
+        // Named import mode: pairs of (exported_name, local_name)
+        for (std::size_t i = 0; i + 1 < named_pairs.size(); i += 2) {
+            const auto& exported_name = named_pairs[i];
+            const auto& local_name = named_pairs[i + 1];
+            Binding* binding = lookup_binding(imported.environment, exported_name);
+            if (binding == nullptr) {
+                return make_loc_error<std::monostate>(module_name, span, "Module does not export '" + exported_name + "'.");
+            }
+            define_value(environment, local_name, read_binding_value(*binding), false, binding->type_name);
+        }
         return ok_result();
     }
 
@@ -6572,7 +6592,8 @@ VoidResult Runtime::check_program_recursive(const std::string& module_name, cons
     for (const auto& statement : program.statements) {
         if (const auto* import_stmt = dynamic_cast<ImportStmt*>(statement.get())) {
             const auto path = resolve_import_path(base_dir, import_stmt->path);
-            if (path_like(import_stmt->path) || std::filesystem::exists(path)) {
+            const bool is_host = host_modules_.contains(import_stmt->path);
+            if (!is_host && (path_like(import_stmt->path) || std::filesystem::exists(path))) {
                 const std::string child_name = path.string();
                 ZEPHYR_TRY_ASSIGN(child_source, read_all_text(path));
                 ZEPHYR_TRY_ASSIGN(child_program, parse_source(child_source, child_name));
@@ -6603,12 +6624,21 @@ VoidResult Runtime::check_program_recursive(const std::string& module_name, cons
     for (const auto& import : resolved_imports) {
         if (import.stmt->alias.has_value()) {
             summary.import_aliases[*import.stmt->alias] = import.module_name;
+        } else if (!import.stmt->named.empty()) {
+            // Named imports: each local_name is individually visible
+            summary.imported_modules.push_back(import.module_name);
         } else {
             summary.imported_modules.push_back(import.module_name);
         }
     }
 
     for (const auto& statement : program.statements) {
+        if (const auto* re_export = dynamic_cast<ReExportStmt*>(statement.get())) {
+            for (const auto& item : re_export->items) {
+                summary.exports.insert(item.exported_as);
+            }
+            continue;
+        }
         if (const auto* function_decl = dynamic_cast<FunctionDecl*>(statement.get())) {
             summary.functions[function_decl->name] =
                 CheckFunctionInfo{module_name, function_decl->name, function_decl->span, function_decl->params, function_decl->return_type};
@@ -8662,7 +8692,43 @@ Runtime::FlowResult Runtime::execute_block(Environment* environment, BlockStmt* 
 Runtime::FlowResult Runtime::execute(Environment* environment, Stmt* stmt, ModuleRecord& module) {
     if (auto* import_stmt = dynamic_cast<ImportStmt*>(stmt)) {
         ZEPHYR_TRY_ASSIGN(imported, import_module(module.path.empty() ? std::filesystem::current_path() : module.path.parent_path(), import_stmt->path));
-        ZEPHYR_TRY(import_exports(environment, *imported, import_stmt->alias, module.name, import_stmt->span));
+        std::vector<std::string> named_pairs;
+        for (const auto& item : import_stmt->named) {
+            named_pairs.push_back(item.name);
+            named_pairs.push_back(item.local_name);
+        }
+        ZEPHYR_TRY(import_exports(environment, *imported, import_stmt->alias, named_pairs, module.name, import_stmt->span));
+        return FlowSignal{};
+    }
+    if (auto* re_export = dynamic_cast<ReExportStmt*>(stmt)) {
+        const auto base = module.path.empty() ? std::filesystem::current_path() : module.path.parent_path();
+        ModuleRecord* source = nullptr;
+        if (!re_export->path.empty()) {
+            ZEPHYR_TRY_ASSIGN(src, import_module(base, re_export->path));
+            source = src;
+        }
+        for (const auto& item : re_export->items) {
+            Value val;
+            if (source != nullptr) {
+                Binding* binding = lookup_binding(source->environment, item.name);
+                if (binding == nullptr) {
+                    return make_loc_error<FlowSignal>(module.name, re_export->span, "Module does not export '" + item.name + "'.");
+                }
+                val = read_binding_value(*binding);
+            } else {
+                Binding* binding = lookup_binding(environment, item.name);
+                if (binding == nullptr) {
+                    return make_loc_error<FlowSignal>(module.name, re_export->span, "'" + item.name + "' is not defined.");
+                }
+                val = read_binding_value(*binding);
+            }
+            define_value(environment, item.exported_as, val, false);
+            if (module.namespace_object != nullptr &&
+                std::find(module.namespace_object->exports.begin(), module.namespace_object->exports.end(), item.exported_as) ==
+                    module.namespace_object->exports.end()) {
+                module.namespace_object->exports.push_back(item.exported_as);
+            }
+        }
         return FlowSignal{};
     }
     if (auto* let_stmt = dynamic_cast<LetStmt*>(stmt)) {
@@ -9142,6 +9208,206 @@ void Runtime::install_core() {
         result_type->variants.push_back(err_spec);
         define_value(root_environment_, "Result", Value::object(result_type), false);
     }
+
+    // std/math built-in module
+    register_module("std/math", [](ZephyrModuleBinder& m) {
+        m.add_constant("pi", ZephyrValue(3.14159265358979323846));
+        m.add_constant("e",  ZephyrValue(2.71828182845904523536));
+        m.add_function("floor", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("floor expects 1 argument.");
+            return ZephyrValue(std::floor(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("ceil", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("ceil expects 1 argument.");
+            return ZephyrValue(std::ceil(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("sqrt", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("sqrt expects 1 argument.");
+            return ZephyrValue(std::sqrt(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("abs", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("abs expects 1 argument.");
+            if (args[0].is_int()) return ZephyrValue(static_cast<std::int64_t>(std::abs(args[0].as_int())));
+            return ZephyrValue(std::abs(args[0].as_float()));
+        }, {}, "");
+        m.add_function("min", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 2) fail("min expects 2 arguments.");
+            const double a = args[0].as_float(), b = args[1].as_float();
+            return ZephyrValue(a < b ? a : b);
+        }, {}, "Float");
+        m.add_function("max", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 2) fail("max expects 2 arguments.");
+            const double a = args[0].as_float(), b = args[1].as_float();
+            return ZephyrValue(a > b ? a : b);
+        }, {}, "Float");
+        m.add_function("pow", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2) fail("pow expects 2 arguments.");
+            return ZephyrValue(std::pow(args[0].as_float(), args[1].as_float()));
+        }, {}, "Float");
+        m.add_function("sin", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("sin expects 1 argument.");
+            return ZephyrValue(std::sin(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("cos", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("cos expects 1 argument.");
+            return ZephyrValue(std::cos(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("log", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("log expects 1 argument.");
+            return ZephyrValue(std::log(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("round", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1) fail("round expects 1 argument.");
+            return ZephyrValue(std::round(args[0].as_float()));
+        }, {}, "Float");
+        m.add_function("clamp", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 3) fail("clamp expects 3 arguments.");
+            const double val = args[0].as_float();
+            const double lo  = args[1].as_float();
+            const double hi  = args[2].as_float();
+            return ZephyrValue(val < lo ? lo : val > hi ? hi : val);
+        }, {}, "Float");
+    });
+
+    // std/string built-in module
+    register_module("std/string", [](ZephyrModuleBinder& m) {
+        m.add_function("len", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1 || !args[0].is_string()) fail("len expects a String argument.");
+            return ZephyrValue(static_cast<std::int64_t>(args[0].as_string().size()));
+        }, {"String"}, "Int");
+        m.add_function("upper", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1 || !args[0].is_string()) fail("upper expects a String argument.");
+            std::string r = args[0].as_string();
+            std::transform(r.begin(), r.end(), r.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            return ZephyrValue(std::move(r));
+        }, {"String"}, "String");
+        m.add_function("lower", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1 || !args[0].is_string()) fail("lower expects a String argument.");
+            std::string r = args[0].as_string();
+            std::transform(r.begin(), r.end(), r.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return ZephyrValue(std::move(r));
+        }, {"String"}, "String");
+        m.add_function("trim", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 1 || !args[0].is_string()) fail("trim expects a String argument.");
+            const std::string& s = args[0].as_string();
+            std::size_t start = 0;
+            while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) ++start;
+            std::size_t end = s.size();
+            while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) --end;
+            return ZephyrValue(s.substr(start, end - start));
+        }, {"String"}, "String");
+        m.add_function("starts_with", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) fail("starts_with expects (String, String).");
+            return ZephyrValue(args[0].as_string().starts_with(args[1].as_string()));
+        }, {"String", "String"}, "Bool");
+        m.add_function("ends_with", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) fail("ends_with expects (String, String).");
+            return ZephyrValue(args[0].as_string().ends_with(args[1].as_string()));
+        }, {"String", "String"}, "Bool");
+        m.add_function("contains", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) fail("contains expects (String, String).");
+            return ZephyrValue(args[0].as_string().find(args[1].as_string()) != std::string::npos);
+        }, {"String", "String"}, "Bool");
+        m.add_function("split", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) fail("split expects (String, String).");
+            const std::string& s   = args[0].as_string();
+            const std::string& sep = args[1].as_string();
+            std::vector<ZephyrValue> parts;
+            if (sep.empty()) {
+                for (char c : s) parts.emplace_back(std::string(1, c));
+            } else {
+                std::size_t pos = 0, found;
+                while ((found = s.find(sep, pos)) != std::string::npos) {
+                    parts.emplace_back(s.substr(pos, found - pos));
+                    pos = found + sep.size();
+                }
+                parts.emplace_back(s.substr(pos));
+            }
+            return ZephyrValue(std::move(parts));
+        }, {"String", "String"}, "Array");
+        m.add_function("join", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 2 || !args[0].is_array() || !args[1].is_string()) fail("join expects (Array, String).");
+            const auto& arr = args[0].as_array();
+            const std::string& sep = args[1].as_string();
+            std::string result;
+            for (std::size_t i = 0; i < arr.size(); ++i) {
+                if (i > 0) result += sep;
+                if (arr[i].is_string()) result += arr[i].as_string();
+                else fail("join: array elements must be strings.");
+            }
+            return ZephyrValue(std::move(result));
+        }, {"Array", "String"}, "String");
+        m.add_function("replace", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 3 || !args[0].is_string() || !args[1].is_string() || !args[2].is_string())
+                fail("replace expects (String, String, String).");
+            std::string result = args[0].as_string();
+            const std::string& from = args[1].as_string();
+            const std::string& to   = args[2].as_string();
+            if (!from.empty()) {
+                std::size_t pos = 0;
+                while ((pos = result.find(from, pos)) != std::string::npos) {
+                    result.replace(pos, from.size(), to);
+                    pos += to.size();
+                }
+            }
+            return ZephyrValue(std::move(result));
+        }, {"String", "String", "String"}, "String");
+        m.add_function("substr", [](const std::vector<ZephyrValue>& args) {
+            if (args.size() != 3 || !args[0].is_string() || !args[1].is_int() || !args[2].is_int())
+                fail("substr expects (String, Int, Int).");
+            const std::string& s = args[0].as_string();
+            const std::int64_t start = args[1].as_int();
+            const std::int64_t len   = args[2].as_int();
+            if (start < 0 || len < 0 || static_cast<std::size_t>(start) > s.size())
+                return ZephyrValue(std::string{});
+            return ZephyrValue(s.substr(static_cast<std::size_t>(start), static_cast<std::size_t>(len)));
+        }, {"String", "Int", "Int"}, "String");
+        m.add_function("to_int", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 1 || !args[0].is_string()) fail("to_int expects a String argument.");
+            const std::string& s = args[0].as_string();
+            std::int64_t val = 0;
+            const char* begin = s.data();
+            const char* end   = s.data() + s.size();
+            const auto [parsed, ec] = std::from_chars(begin, end, val);
+            ZephyrEnumValue result;
+            result.type_name = "Result";
+            if (ec == std::errc{} && parsed == end) {
+                result.variant_name = "Ok";
+                result.payload.emplace_back(val);
+            } else {
+                result.variant_name = "Err";
+                result.payload.emplace_back(std::string("parse error"));
+            }
+            return ZephyrValue(result);
+        }, {"String"}, "Result");
+        m.add_function("to_float", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 1 || !args[0].is_string()) fail("to_float expects a String argument.");
+            const std::string& s = args[0].as_string();
+            char* parsed_end = nullptr;
+            errno = 0;
+            const double val = std::strtod(s.c_str(), &parsed_end);
+            const bool ok = (errno == 0 && parsed_end == s.c_str() + s.size() && !s.empty());
+            ZephyrEnumValue result;
+            result.type_name = "Result";
+            if (ok) {
+                result.variant_name = "Ok";
+                result.payload.emplace_back(val);
+            } else {
+                result.variant_name = "Err";
+                result.payload.emplace_back(std::string("parse error"));
+            }
+            return ZephyrValue(result);
+        }, {"String"}, "Result");
+        m.add_function("repeat", [](const std::vector<ZephyrValue>& args) -> ZephyrValue {
+            if (args.size() != 2 || !args[0].is_string() || !args[1].is_int())
+                fail("repeat expects (String, Int).");
+            const std::string& s = args[0].as_string();
+            const std::int64_t n = args[1].as_int();
+            std::string result;
+            for (std::int64_t i = 0; i < n; ++i) result += s;
+            return ZephyrValue(std::move(result));
+        }, {"String", "Int"}, "String");
+    });
 }
 
 void Runtime::mark_roots() {
