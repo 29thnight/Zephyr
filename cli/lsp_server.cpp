@@ -195,6 +195,78 @@ struct LspServer {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Source symbol extraction (regex-free, line-scan based)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct SourceSymbol {
+    std::string name;
+    int line = 0;   // 0-based
+    int col  = 0;   // 0-based
+    std::string kind;       // "fn", "struct", "trait", "let"
+    std::string signature;  // display text for hover/completion
+};
+
+static std::size_t scan_identifier(const std::string& line, std::size_t pos) {
+    while (pos < line.size() && (std::isalnum(static_cast<unsigned char>(line[pos])) || line[pos] == '_')) ++pos;
+    return pos;
+}
+
+static bool word_boundary_before(const std::string& line, std::size_t pos) {
+    return pos == 0 || !std::isalnum(static_cast<unsigned char>(line[pos - 1]));
+}
+
+std::vector<SourceSymbol> extract_source_symbols(const std::string& source) {
+    std::vector<SourceSymbol> symbols;
+    std::istringstream ss(source);
+    std::string ln;
+    int lnum = 0;
+
+    auto try_extract = [&](const std::string& keyword, const std::string& kind) {
+        std::size_t p = 0;
+        while ((p = ln.find(keyword, p)) != std::string::npos) {
+            if (!word_boundary_before(ln, p)) { ++p; continue; }
+            std::size_t after = p + keyword.size();
+            if (after >= ln.size() || std::isalnum(static_cast<unsigned char>(ln[after])) || ln[after] == '_') { ++p; continue; }
+            while (after < ln.size() && ln[after] == ' ') ++after;
+            std::size_t ne = scan_identifier(ln, after);
+            if (ne > after) {
+                SourceSymbol sym;
+                sym.name = ln.substr(after, ne - after);
+                sym.line = lnum;
+                sym.col  = static_cast<int>(p);
+                sym.kind = kind;
+                if (kind == "fn") {
+                    std::size_t brace = ln.find('{');
+                    std::string sig = ln.substr(p, brace != std::string::npos ? brace - p : std::string::npos);
+                    while (!sig.empty() && std::isspace(static_cast<unsigned char>(sig.back()))) sig.pop_back();
+                    sym.signature = sig;
+                } else if (kind == "let") {
+                    std::string sig = ln.substr(p);
+                    // trim at semicolon
+                    auto sc = sig.find(';');
+                    if (sc != std::string::npos) sig = sig.substr(0, sc);
+                    while (!sig.empty() && std::isspace(static_cast<unsigned char>(sig.back()))) sig.pop_back();
+                    sym.signature = sig;
+                } else {
+                    sym.signature = kind + " " + sym.name;
+                }
+                symbols.push_back(std::move(sym));
+            }
+            ++p;
+        }
+    };
+
+    while (std::getline(ss, ln)) {
+        try_extract("fn ",     "fn");
+        try_extract("struct ", "struct");
+        try_extract("trait ",  "trait");
+        try_extract("let ",    "let");
+        ++lnum;
+    }
+    return symbols;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // LSP feature helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -228,30 +300,35 @@ std::string lsp_hover_content(const std::string& source, int line, int character
     if (word.empty()) return "{}";
 
     static const std::unordered_map<std::string, std::string> builtin_docs = {
-        {"print",  "print(value: Any) -> Nil\nConsole output"},
-        {"len",    "len(s: String) -> Int\nString length"},
-        {"fn",     "fn name(params) -> ReturnType { ... }\nFunction declaration"},
-        {"let",    "let name = value\nVariable declaration"},
-        {"yield",  "yield value\nYield from coroutine"},
-        {"if",     "if condition { ... } else { ... }\nConditional expression"},
-        {"else",   "else { ... }\nAlternative branch"},
-        {"while",  "while condition { ... }\nLoop while condition is true"},
-        {"for",    "for item in collection { ... }\nIterate over a collection"},
-        {"return", "return value\nReturn a value from a function"},
-        {"true",   "true\nBoolean literal"},
-        {"false",  "false\nBoolean literal"},
-        {"nil",    "nil\nNull/absent value"},
-        {"import", "import module\nImport a module"},
-        {"export", "export name\nExport a name from the current module"},
-        {"trait",  "trait Name { ... }\nDefine a trait (interface)"},
-        {"impl",   "impl TraitName for TypeName { ... }\nImplement a trait for a type"},
-        {"match",  "match value { pattern => expr, ... }\nPattern matching expression"},
-        {"struct", "struct Name { field: Type, ... }\nDefine a struct type"},
-        {"class",  "class Name { ... }\nDefine a class"},
-        {"int",    "int\nInteger type (64-bit signed)"},
-        {"float",  "float\nFloating-point type (64-bit)"},
-        {"string", "string\nString type (UTF-8)"},
-        {"bool",   "bool\nBoolean type"},
+        {"print",   "print(value: any) -> void\nConsole output"},
+        {"println", "println(value: any) -> void\nConsole output with newline"},
+        {"len",     "len(s: string) -> int\nString or array length"},
+        {"fn",      "fn name(params) -> ReturnType { ... }\nFunction declaration"},
+        {"let",     "let name = value\nVariable declaration"},
+        {"yield",   "yield value\nYield from coroutine"},
+        {"if",      "if condition { ... } else { ... }\nConditional expression"},
+        {"else",    "else { ... }\nAlternative branch"},
+        {"while",   "while condition { ... }\nLoop while condition is true"},
+        {"for",     "for item in collection { ... }\nIterate over a collection"},
+        {"return",  "return value\nReturn a value from a function"},
+        {"true",    "true\nBoolean literal"},
+        {"false",   "false\nBoolean literal"},
+        {"nil",     "nil\nNull/absent value"},
+        {"import",  "import \"module\"\nImport a module"},
+        {"export",  "export name\nExport a name from the current module"},
+        {"trait",   "trait Name { fn method(self) -> Type }\nDefine a trait (interface)"},
+        {"impl",    "impl TraitName for TypeName { ... }\nImplement a trait for a type"},
+        {"match",   "match value { pattern => expr, _ => default }\nPattern matching"},
+        {"struct",  "struct Name { field: type, ... }\nDefine a struct type"},
+        {"int",     "int\nInteger type (64-bit signed)"},
+        {"float",   "float\nFloating-point type (64-bit)"},
+        {"string",  "string\nString type (UTF-8)"},
+        {"bool",    "bool\nBoolean type (true/false)"},
+        {"void",    "void\nNo-value return type"},
+        {"any",     "any\nDynamic type"},
+        {"Ok",      "Ok(value)\nResult success variant"},
+        {"Err",     "Err(error)\nResult error variant"},
+        {"where",   "where T: Trait\nTrait constraint in generic functions"},
     };
 
     auto it = builtin_docs.find(word);
@@ -259,78 +336,95 @@ std::string lsp_hover_content(const std::string& source, int line, int character
         return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"```zephyr\\n"
                + lsp_escape_string(it->second) + "\\n```\"}}";
     }
+
+    // Search source symbols for a matching definition
+    const auto symbols = extract_source_symbols(source);
+    for (const auto& sym : symbols) {
+        if (sym.name == word && !sym.signature.empty()) {
+            const std::string label = "**(" + sym.kind + ")** `" + sym.signature + "`";
+            return "{\"contents\":{\"kind\":\"markdown\",\"value\":\""
+                   + lsp_escape_string(label) + "\"}}";
+        }
+    }
+
     return "{}";
 }
 
-std::string lsp_completion_items() {
+std::string lsp_completion_items(const std::string& source) {
     static const std::vector<std::string> keywords = {
         "fn", "let", "if", "else", "while", "for", "return", "yield",
         "true", "false", "nil", "import", "export", "trait", "impl",
-        "match", "struct", "class", "int", "float", "string", "bool"
+        "match", "struct", "int", "float", "string", "bool", "void",
+        "any", "Ok", "Err", "where"
     };
 
     std::ostringstream items;
     items << "[";
-    for (std::size_t i = 0; i < keywords.size(); ++i) {
-        if (i > 0) items << ",";
-        items << "{\"label\":\"" << keywords[i] << "\",\"kind\":14}";
+    bool first = true;
+
+    for (const auto& kw : keywords) {
+        if (!first) items << ",";
+        first = false;
+        items << "{\"label\":\"" << kw << "\",\"kind\":14}";
     }
+
+    // Source-defined symbols
+    const auto symbols = extract_source_symbols(source);
+    for (const auto& sym : symbols) {
+        if (!first) items << ",";
+        first = false;
+        // LSP completion kinds: 3=Function, 22=Struct, 8=Interface(trait), 6=Variable
+        int kind = 6;
+        if      (sym.kind == "fn")     kind = 3;
+        else if (sym.kind == "struct") kind = 22;
+        else if (sym.kind == "trait")  kind = 8;
+
+        const std::string detail = sym.signature.empty() ? sym.name : sym.signature;
+        items << "{\"label\":\"" << lsp_escape_string(sym.name)
+              << "\",\"kind\":" << kind
+              << ",\"detail\":\"" << lsp_escape_string(detail) << "\"}";
+    }
+
     items << "]";
     return items.str();
 }
 
 std::string lsp_find_definition(const std::string& source, const std::string& uri, const std::string& word) {
     if (word.empty()) return "null";
-    std::istringstream ss(source);
-    std::string line;
-    int line_num = 0;
-    while (std::getline(ss, line)) {
-        const std::string pattern = "fn " + word + "(";
-        const auto col = line.find(pattern);
-        if (col != std::string::npos) {
+    const auto symbols = extract_source_symbols(source);
+    for (const auto& sym : symbols) {
+        if (sym.name == word) {
             return "{\"uri\":\"" + lsp_escape_string(uri)
-                 + "\",\"range\":{\"start\":{\"line\":" + std::to_string(line_num)
-                 + ",\"character\":" + std::to_string(col)
-                 + "},\"end\":{\"line\":" + std::to_string(line_num)
-                 + ",\"character\":" + std::to_string(col + word.size()) + "}}}";
+                 + "\",\"range\":{\"start\":{\"line\":" + std::to_string(sym.line)
+                 + ",\"character\":" + std::to_string(sym.col)
+                 + "},\"end\":{\"line\":" + std::to_string(sym.line)
+                 + ",\"character\":" + std::to_string(sym.col + static_cast<int>(word.size())) + "}}}";
         }
-        ++line_num;
     }
     return "null";
 }
 
 std::string lsp_document_symbols(const std::string& source, const std::string& uri) {
-    // Scan for top-level "fn name(" patterns
-    std::istringstream ss(source);
-    std::string line;
-    int line_num = 0;
-    bool first = true;
+    const auto symbols = extract_source_symbols(source);
     std::ostringstream out;
     out << "[";
-    while (std::getline(ss, line)) {
-        const std::string prefix = "fn ";
-        auto fn_pos = line.find(prefix);
-        if (fn_pos != std::string::npos) {
-            std::size_t name_start = fn_pos + prefix.size();
-            // skip whitespace
-            while (name_start < line.size() && line[name_start] == ' ') ++name_start;
-            std::size_t name_end = name_start;
-            while (name_end < line.size() && (std::isalnum(line[name_end]) || line[name_end] == '_')) ++name_end;
-            if (name_end > name_start) {
-                const std::string fn_name = line.substr(name_start, name_end - name_start);
-                if (!first) out << ",";
-                first = false;
-                // kind 12 = Function
-                out << "{\"name\":\"" << lsp_escape_string(fn_name)
-                    << "\",\"kind\":12"
-                    << ",\"location\":{\"uri\":\"" << lsp_escape_string(uri)
-                    << "\",\"range\":{\"start\":{\"line\":" << line_num
-                    << ",\"character\":" << fn_pos
-                    << "},\"end\":{\"line\":" << line_num
-                    << ",\"character\":" << name_end << "}}}}";
-            }
-        }
-        ++line_num;
+    bool first = true;
+    for (const auto& sym : symbols) {
+        // LSP symbol kinds: 12=Function, 23=Struct, 11=Interface(trait), 13=Variable
+        int kind = 13;
+        if      (sym.kind == "fn")     kind = 12;
+        else if (sym.kind == "struct") kind = 23;
+        else if (sym.kind == "trait")  kind = 11;
+
+        if (!first) out << ",";
+        first = false;
+        out << "{\"name\":\"" << lsp_escape_string(sym.name)
+            << "\",\"kind\":" << kind
+            << ",\"location\":{\"uri\":\"" << lsp_escape_string(uri)
+            << "\",\"range\":{\"start\":{\"line\":" << sym.line
+            << ",\"character\":" << sym.col
+            << "},\"end\":{\"line\":" << sym.line
+            << ",\"character\":" << (sym.col + static_cast<int>(sym.name.size())) << "}}}}";
     }
     out << "]";
     return out.str();
@@ -356,6 +450,7 @@ bool lsp_dispatch(LspServer& server, const std::string& msg) {
                     "\"hoverProvider\":true,"
                     "\"completionProvider\":{\"triggerCharacters\":[\".\"]},"
                     "\"definitionProvider\":true,"
+                    "\"referencesProvider\":true,"
                     "\"documentSymbolProvider\":true"
                 "},"
                 "\"serverInfo\":{\"name\":\"zephyr-lsp\",\"version\":\"0.1.0\"}"
@@ -422,7 +517,12 @@ bool lsp_dispatch(LspServer& server, const std::string& msg) {
     }
 
     if (method == "textDocument/completion") {
-        const std::string items = lsp_completion_items();
+        std::string items = "[]";
+        {
+            const std::string uri = lsp_extract_string(msg, "uri");
+            auto it = server.open_documents.find(uri);
+            items = lsp_completion_items(it != server.open_documents.end() ? it->second : "");
+        }
         lsp_send_message(
             "{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ","
             "\"result\":{\"isIncomplete\":false,\"items\":" + items + "}}");
@@ -451,6 +551,47 @@ bool lsp_dispatch(LspServer& server, const std::string& msg) {
             symbols = lsp_document_symbols(it->second, uri);
         }
         lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + symbols + "}");
+        return true;
+    }
+
+    if (method == "textDocument/references") {
+        const std::string uri = lsp_extract_string(msg, "uri");
+        const int line = lsp_extract_int(msg, "line");
+        const int character = lsp_extract_int(msg, "character");
+        std::ostringstream refs;
+        refs << "[";
+        auto it = server.open_documents.find(uri);
+        if (it != server.open_documents.end()) {
+            const std::string word = extract_word_at(it->second, line, character);
+            if (!word.empty()) {
+                std::istringstream ss(it->second);
+                std::string ln;
+                int lnum = 0;
+                bool first_ref = true;
+                while (std::getline(ss, ln)) {
+                    std::size_t pos = 0;
+                    while ((pos = ln.find(word, pos)) != std::string::npos) {
+                        // Verify word boundaries
+                        bool before_ok = (pos == 0 || !std::isalnum(static_cast<unsigned char>(ln[pos - 1])) && ln[pos - 1] != '_');
+                        std::size_t after_pos = pos + word.size();
+                        bool after_ok  = (after_pos >= ln.size() || (!std::isalnum(static_cast<unsigned char>(ln[after_pos])) && ln[after_pos] != '_'));
+                        if (before_ok && after_ok) {
+                            if (!first_ref) refs << ",";
+                            first_ref = false;
+                            refs << "{\"uri\":\"" << lsp_escape_string(uri)
+                                 << "\",\"range\":{\"start\":{\"line\":" << lnum
+                                 << ",\"character\":" << pos
+                                 << "},\"end\":{\"line\":" << lnum
+                                 << ",\"character\":" << after_pos << "}}}";
+                        }
+                        ++pos;
+                    }
+                    ++lnum;
+                }
+            }
+        }
+        refs << "]";
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + refs.str() + "}");
         return true;
     }
 
