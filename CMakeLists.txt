@@ -6,14 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ─── Build options ────────────────────────────────────────────────────────────
-option(ZEPHYR_BUILD_CLI   "Build zephyr_cli executable"  ON)
-option(ZEPHYR_BUILD_TESTS "Build zephyr_tests executable" ON)
-option(ZEPHYR_ENABLE_PGO  "Enable PGO instrumentation (MSVC /GL+/LTCG)"  OFF)
+option(ZEPHYR_BUILD_CLI     "Build zephyr_cli executable"    ON)
+option(ZEPHYR_BUILD_TESTS   "Build zephyr_tests executable"  ON)
+option(ZEPHYR_BUILD_BENCH   "Build zephyr_bench executable"  ON)
+option(ZEPHYR_BUILD_SAMPLES "Build sample executables"       ON)
+option(ZEPHYR_ENABLE_PGO    "Enable PGO instrumentation (MSVC /GL+/LTCG)" OFF)
 
 # ─── ZephyrRuntime (static library) ──────────────────────────────────────────
 add_library(ZephyrRuntime STATIC
     src/zephyr.cpp
-    src/zephyr_gc.cpp
+    src/zephyr_parser.cpp
+    src/zephyr_gc_impl.cpp
 )
 
 target_include_directories(ZephyrRuntime
@@ -23,7 +26,7 @@ target_include_directories(ZephyrRuntime
 
 if(MSVC)
     target_compile_options(ZephyrRuntime PRIVATE
-        /W3 /permissive- /bigobj
+        /W3 /permissive- /bigobj /utf-8
         $<$<CONFIG:Release>:/O2 /GL>
         $<$<CONFIG:Debug>:/Od /RTC1>
     )
@@ -47,6 +50,7 @@ if(ZEPHYR_BUILD_CLI)
     add_executable(zephyr_cli
         cli/main.cpp
         cli/lsp_server.cpp
+        cli/dap_server.cpp
     )
     target_link_libraries(zephyr_cli PRIVATE ZephyrRuntime)
     target_include_directories(zephyr_cli PRIVATE include)
@@ -83,6 +87,53 @@ if(ZEPHYR_BUILD_TESTS)
             "$<TARGET_FILE_DIR:zephyr_tests>/corpus"
         COMMENT "Copying corpus to test output directory"
     )
+endif()
+
+# ─── zephyr_bench ────────────────────────────────────────────────────────────
+if(ZEPHYR_BUILD_BENCH)
+    add_executable(zephyr_bench
+        bench/main.cpp
+        bench/bench_runner.cpp
+    )
+    target_link_libraries(zephyr_bench PRIVATE ZephyrRuntime)
+    target_include_directories(zephyr_bench PRIVATE include bench)
+    if(MSVC)
+        target_compile_options(zephyr_bench PRIVATE /W3 /permissive- /bigobj
+            $<$<CONFIG:Release>:/O2 /GL>)
+        target_link_options(zephyr_bench PRIVATE $<$<CONFIG:Release>:/LTCG>)
+    else()
+        target_compile_options(zephyr_bench PRIVATE
+            -Wall -Wextra
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Debug>:-O0 -g>)
+    endif()
+    # Copy bench scripts to build dir
+    add_custom_command(TARGET zephyr_bench POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/bench/scripts"
+            "$<TARGET_FILE_DIR:zephyr_bench>/bench/scripts"
+        COMMENT "Copying bench scripts to output directory"
+    )
+endif()
+
+# ─── zephyr_engine_sample ─────────────────────────────────────────────────────
+if(ZEPHYR_BUILD_SAMPLES)
+    add_executable(zephyr_engine_sample
+        samples/engine_sample/main.cpp
+    )
+    target_link_libraries(zephyr_engine_sample PRIVATE ZephyrRuntime)
+    target_include_directories(zephyr_engine_sample PRIVATE include)
+    if(MSVC)
+        target_compile_options(zephyr_engine_sample PRIVATE /W3 /permissive- /bigobj
+            $<$<CONFIG:Release>:/O2 /GL>)
+        target_link_options(zephyr_engine_sample PRIVATE $<$<CONFIG:Release>:/LTCG>)
+    else()
+        target_compile_options(zephyr_engine_sample PRIVATE
+            -Wall -Wextra
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Debug>:-O0 -g>)
+    endif()
+    set_target_properties(zephyr_engine_sample PROPERTIES OUTPUT_NAME "zephyr_engine_sample")
 endif()
 
 # ─── Install ──────────────────────────────────────────────────────────────────

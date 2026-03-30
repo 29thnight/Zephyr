@@ -423,7 +423,7 @@ struct Token {
     Span span;
 };
 
-#include "zephyr_lexer.inl"
+#include "zephyr_lexer.hpp"
 
 enum class ObjectKind {
     String,
@@ -471,8 +471,8 @@ inline const char* object_kind_name(ObjectKind kind) {
 }
 
 
-#include "zephyr_types.inl"
+#include "zephyr_types.hpp"
 
-#include "zephyr_compiler.inl"
+#include "zephyr_compiler.hpp"
 
 }  // namespace zephyr

@@ -1,4 +1,7 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+// zephyr_compiler.hpp — Bytecode opcodes, IR, and BytecodeCompiler implementation.
+// Included by zephyr_internal.hpp after the type definitions.
+#pragma once
+
 enum class BytecodeOp {
     LoadConst,
     LoadLocal,

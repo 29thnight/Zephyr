@@ -1,4 +1,8 @@
-// Part of src/zephyr.cpp — included by zephyr.cpp
+// zephyr_gc_impl.cpp — Generational GC: nursery/old-gen allocation, tracing,
+// mark-and-sweep, card table, write barrier, and coroutine frame compaction.
+#include "zephyr_internal.hpp"
+
+namespace zephyr {
 
 // Walk every node of an environment parent-chain. Visitor returns true to continue, false to stop.
 template <typename Visitor>
@@ -224,10 +228,10 @@ void ModuleNamespaceObject::trace(Runtime& runtime) {
 }
 
 void StructTypeObject::trace(Runtime& runtime) {
-    for (auto& [name, val] : static_methods) {
+    for (auto& [method_name, val] : static_methods) {
         runtime.mark_value(val);
     }
-    for (auto& [name, val] : instance_methods) {
+    for (auto& [method_name, val] : instance_methods) {
         runtime.mark_value(val);
     }
 }
@@ -13757,3 +13761,5 @@ std::string to_string(const ZephyrValue& value) {
     }
     return "<value>";
 }
+
+}  // namespace zephyr

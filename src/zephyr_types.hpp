@@ -1,4 +1,7 @@
-﻿// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// zephyr_types.hpp — Core GC object types, value representation, and handle infrastructure.
+// Included by zephyr_internal.hpp after the Lexer/Token definitions.
+#pragma once
+
 struct GcObject;
 enum class HandleContainerKind : std::uint8_t {
     Stack,

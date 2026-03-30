@@ -295,6 +295,52 @@ void lsp_publish_diagnostics(LspServer& server, const std::string& uri, const st
     lsp_send_message(diags.str());
 }
 
+// Infer a simple type label from a let-binding RHS (best-effort, no AST)
+static std::string infer_let_type(const std::string& rhs) {
+    if (rhs.empty()) return "";
+    // Strip leading whitespace
+    std::size_t p = 0;
+    while (p < rhs.size() && std::isspace(static_cast<unsigned char>(rhs[p]))) ++p;
+    const std::string v = rhs.substr(p);
+    if (v.empty()) return "";
+    if (v == "true" || v == "false") return "bool";
+    if (v.front() == '"') return "string";
+    if (v.front() == '[') return "array";
+    // Check for float: contains '.' or 'e'/'E' and starts with digit or '-'
+    bool has_dot = v.find('.') != std::string::npos;
+    bool has_e   = v.find('e') != std::string::npos || v.find('E') != std::string::npos;
+    bool is_num  = std::isdigit(static_cast<unsigned char>(v.front())) || (v.front() == '-' && v.size() > 1 && std::isdigit(static_cast<unsigned char>(v[1])));
+    if (is_num && (has_dot || has_e)) return "float";
+    if (is_num) return "int";
+    // Struct literal: starts with uppercase
+    if (std::isupper(static_cast<unsigned char>(v.front()))) {
+        std::size_t ne = scan_identifier(v, 0);
+        return v.substr(0, ne);
+    }
+    return "";
+}
+
+// Build hover markdown for a user-defined symbol
+static std::string hover_for_symbol(const SourceSymbol& sym) {
+    std::string text;
+    if (sym.kind == "let") {
+        // Try to extract RHS for type inference
+        const auto eq = sym.signature.find('=');
+        std::string type_label;
+        if (eq != std::string::npos) {
+            type_label = infer_let_type(sym.signature.substr(eq + 1));
+        }
+        if (!type_label.empty()) {
+            text = "**let** `" + sym.name + "`: `" + type_label + "`";
+        } else {
+            text = "**(" + sym.kind + ")** `" + sym.signature + "`";
+        }
+    } else {
+        text = "**(" + sym.kind + ")** `" + sym.signature + "`";
+    }
+    return "{\"contents\":{\"kind\":\"markdown\",\"value\":\"" + lsp_escape_string(text) + "\"}}";
+}
+
 std::string lsp_hover_content(const std::string& source, int line, int character) {
     const std::string word = extract_word_at(source, line, character);
     if (word.empty()) return "{}";
@@ -341,13 +387,101 @@ std::string lsp_hover_content(const std::string& source, int line, int character
     const auto symbols = extract_source_symbols(source);
     for (const auto& sym : symbols) {
         if (sym.name == word && !sym.signature.empty()) {
-            const std::string label = "**(" + sym.kind + ")** `" + sym.signature + "`";
-            return "{\"contents\":{\"kind\":\"markdown\",\"value\":\""
-                   + lsp_escape_string(label) + "\"}}";
+            return hover_for_symbol(sym);
         }
     }
 
     return "{}";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// signatureHelp: parse active function call at cursor
+// ─────────────────────────────────────────────────────────────────────────────
+
+std::string lsp_signature_help(const std::string& source, int line, int character) {
+    // Walk the current line backwards from cursor to find "funcName("
+    std::istringstream ss(source);
+    std::string ln;
+    int cur = 0;
+    while (std::getline(ss, ln)) {
+        if (cur == line) break;
+        ++cur;
+    }
+    if (cur != line || ln.empty()) return "null";
+
+    int end = std::min(character, static_cast<int>(ln.size()));
+    // Find the innermost open paren
+    int paren_depth = 0;
+    int active_param = 0;
+    int fn_end = -1;
+    for (int i = end - 1; i >= 0; --i) {
+        char c = ln[i];
+        if (c == ')') { ++paren_depth; continue; }
+        if (c == '(') {
+            if (paren_depth > 0) { --paren_depth; continue; }
+            fn_end = i;
+            break;
+        }
+        if (c == ',' && paren_depth == 0) ++active_param;
+    }
+    if (fn_end < 0) return "null";
+
+    // Extract function name before '('
+    int ne = fn_end - 1;
+    while (ne >= 0 && std::isspace(static_cast<unsigned char>(ln[ne]))) --ne;
+    int ns = ne;
+    while (ns > 0 && (std::isalnum(static_cast<unsigned char>(ln[ns - 1])) || ln[ns - 1] == '_')) --ns;
+    if (ns > ne) return "null";
+    const std::string fn_name = ln.substr(ns, ne - ns + 1);
+    if (fn_name.empty()) return "null";
+
+    // Find matching fn symbol
+    const auto symbols = extract_source_symbols(source);
+    for (const auto& sym : symbols) {
+        if (sym.kind != "fn" || sym.name != fn_name) continue;
+        // Extract parameter list from signature
+        const auto lp = sym.signature.find('(');
+        const auto rp = sym.signature.rfind(')');
+        std::string params_str;
+        if (lp != std::string::npos && rp != std::string::npos && rp > lp)
+            params_str = sym.signature.substr(lp + 1, rp - lp - 1);
+
+        // Split params by comma
+        std::vector<std::string> params;
+        std::string cur_param;
+        int depth2 = 0;
+        for (char c : params_str) {
+            if (c == '<' || c == '(') ++depth2;
+            else if (c == '>' || c == ')') --depth2;
+            else if (c == ',' && depth2 == 0) {
+                // trim
+                while (!cur_param.empty() && std::isspace(static_cast<unsigned char>(cur_param.front()))) cur_param.erase(cur_param.begin());
+                while (!cur_param.empty() && std::isspace(static_cast<unsigned char>(cur_param.back()))) cur_param.pop_back();
+                params.push_back(cur_param);
+                cur_param.clear();
+                continue;
+            }
+            cur_param += c;
+        }
+        while (!cur_param.empty() && std::isspace(static_cast<unsigned char>(cur_param.front()))) cur_param.erase(cur_param.begin());
+        while (!cur_param.empty() && std::isspace(static_cast<unsigned char>(cur_param.back()))) cur_param.pop_back();
+        if (!cur_param.empty()) params.push_back(cur_param);
+
+        // Build parameters JSON array
+        std::ostringstream pjson;
+        pjson << "[";
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (i > 0) pjson << ",";
+            pjson << "{\"label\":\"" << lsp_escape_string(params[i]) << "\"}";
+        }
+        pjson << "]";
+
+        const int clamp_param = std::min(active_param, static_cast<int>(params.size()) - 1);
+        return "{\"signatures\":[{\"label\":\"" + lsp_escape_string(sym.signature)
+             + "\",\"parameters\":" + pjson.str() + "}]"
+             + ",\"activeSignature\":0,\"activeParameter\":" + std::to_string(std::max(0, clamp_param)) + "}";
+    }
+    return "null";
 }
 
 std::string lsp_completion_items(const std::string& source) {
@@ -451,9 +585,12 @@ bool lsp_dispatch(LspServer& server, const std::string& msg) {
                     "\"completionProvider\":{\"triggerCharacters\":[\".\"]},"
                     "\"definitionProvider\":true,"
                     "\"referencesProvider\":true,"
-                    "\"documentSymbolProvider\":true"
+                    "\"documentSymbolProvider\":true,"
+                    "\"workspaceSymbolProvider\":true,"
+                    "\"renameProvider\":true,"
+                    "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}"
                 "},"
-                "\"serverInfo\":{\"name\":\"zephyr-lsp\",\"version\":\"0.1.0\"}"
+                "\"serverInfo\":{\"name\":\"zephyr-lsp\",\"version\":\"0.2.0\"}"
             "}}";
         lsp_send_message(response);
         return true;
@@ -551,6 +688,94 @@ bool lsp_dispatch(LspServer& server, const std::string& msg) {
             symbols = lsp_document_symbols(it->second, uri);
         }
         lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + symbols + "}");
+        return true;
+    }
+
+    if (method == "textDocument/signatureHelp") {
+        const std::string uri = lsp_extract_string(msg, "uri");
+        const int line = lsp_extract_int(msg, "line");
+        const int character = lsp_extract_int(msg, "character");
+        std::string result = "null";
+        auto it = server.open_documents.find(uri);
+        if (it != server.open_documents.end()) {
+            result = lsp_signature_help(it->second, line, character);
+        }
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + result + "}");
+        return true;
+    }
+
+    if (method == "textDocument/rename") {
+        const std::string uri = lsp_extract_string(msg, "uri");
+        const int line = lsp_extract_int(msg, "line");
+        const int character = lsp_extract_int(msg, "character");
+        const std::string new_name = lsp_extract_string(msg, "newName");
+        std::string result = "null";
+        auto it = server.open_documents.find(uri);
+        if (it != server.open_documents.end() && !new_name.empty()) {
+            const std::string word = extract_word_at(it->second, line, character);
+            if (!word.empty()) {
+                // Collect all reference ranges (same logic as references handler)
+                std::ostringstream edits;
+                edits << "[";
+                std::istringstream sstream(it->second);
+                std::string ln2;
+                int lnum = 0;
+                bool first_edit = true;
+                while (std::getline(sstream, ln2)) {
+                    std::size_t pos = 0;
+                    while ((pos = ln2.find(word, pos)) != std::string::npos) {
+                        bool before_ok = (pos == 0 || (!std::isalnum(static_cast<unsigned char>(ln2[pos - 1])) && ln2[pos - 1] != '_'));
+                        std::size_t after_pos = pos + word.size();
+                        bool after_ok  = (after_pos >= ln2.size() || (!std::isalnum(static_cast<unsigned char>(ln2[after_pos])) && ln2[after_pos] != '_'));
+                        if (before_ok && after_ok) {
+                            if (!first_edit) edits << ",";
+                            first_edit = false;
+                            edits << "{\"range\":{\"start\":{\"line\":" << lnum
+                                  << ",\"character\":" << pos
+                                  << "},\"end\":{\"line\":" << lnum
+                                  << ",\"character\":" << after_pos
+                                  << "}},\"newText\":\"" << lsp_escape_string(new_name) << "\"}";
+                        }
+                        ++pos;
+                    }
+                    ++lnum;
+                }
+                edits << "]";
+                result = "{\"changes\":{\"" + lsp_escape_string(uri) + "\":" + edits.str() + "}}";
+            }
+        }
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + result + "}");
+        return true;
+    }
+
+    if (method == "workspace/symbol") {
+        const std::string query = lsp_extract_string(msg, "query");
+        std::ostringstream out;
+        out << "[";
+        bool first = true;
+        for (const auto& [uri, source] : server.open_documents) {
+            const auto symbols = extract_source_symbols(source);
+            for (const auto& sym : symbols) {
+                // Filter by query (empty query = return all)
+                if (!query.empty() && sym.name.find(query) == std::string::npos) continue;
+                int kind = 13;  // Variable
+                if      (sym.kind == "fn")     kind = 12;
+                else if (sym.kind == "struct") kind = 23;
+                else if (sym.kind == "trait")  kind = 11;
+                if (!first) out << ",";
+                first = false;
+                out << "{\"name\":\"" << lsp_escape_string(sym.name)
+                    << "\",\"kind\":" << kind
+                    << ",\"location\":{\"uri\":\"" << lsp_escape_string(uri)
+                    << "\",\"range\":{\"start\":{\"line\":" << sym.line
+                    << ",\"character\":" << sym.col
+                    << "},\"end\":{\"line\":" << sym.line
+                    << ",\"character\":" << (sym.col + static_cast<int>(sym.name.size()))
+                    << "}}}}";
+            }
+        }
+        out << "]";
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id_str + ",\"result\":" + out.str() + "}");
         return true;
     }
 

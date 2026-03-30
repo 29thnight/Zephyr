@@ -1,4 +1,7 @@
-﻿// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// zephyr_lexer.hpp — Lexer class: tokenises Zephyr source into a Token stream.
+// Included by zephyr_internal.hpp; depends on Token/Span/TokenType defined there.
+#pragma once
+
 class Lexer {
 public:
     Lexer(std::string source, std::string module_name, std::size_t line = 1, std::size_t column = 1)

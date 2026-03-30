@@ -1,4 +1,9 @@
-﻿// Part of src/zephyr.cpp — included by zephyr.cpp
+﻿// zephyr_parser.cpp — Parser class and Runtime::parse_source().
+// Consumes a Token stream produced by Lexer and builds a typed AST (Program).
+#include "zephyr_internal.hpp"
+
+namespace zephyr {
+
 class Parser {
 public:
     Parser(std::vector<Token> tokens, std::string module_name) : tokens_(std::move(tokens)), module_name_(std::move(module_name)) {}
@@ -1285,4 +1290,13 @@ VoidResult Parser::parse_where_clause(std::vector<TraitBound>& out_bounds) {
     } while (match({TokenType::Comma}));
     return ok_result();
 }
+
+RuntimeResult<std::unique_ptr<Program>> Runtime::parse_source(const std::string& source, const std::string& module_name) {
+    Lexer lexer(source, module_name);
+    ZEPHYR_TRY_ASSIGN(tokens, lexer.scan_tokens());
+    Parser parser(std::move(tokens), module_name);
+    return parser.parse_program();
+}
+
+}  // namespace zephyr
 
