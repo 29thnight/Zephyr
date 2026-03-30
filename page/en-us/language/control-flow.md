@@ -70,16 +70,17 @@ for i in 0..=5 {
 
 // Sequence iteration
 for item in values {
-  print(item);
+    print(item);
 }
 
+// Range bounds iteration
 for i in 0..n {
-  print(i);
+    print(i);
 }
 
 // Range bounds iteration (inclusive)
 for i in 0..=n {
-  print(i);
+    print(i);
 }
 ```
 
@@ -126,4 +127,43 @@ scores.set("Bob", 95);
 for entry in scores {
     print(f"{entry.key}: {entry.value}");
 }
+```
+
+---
+
+## Returning from Functions
+
+The `return` keyword is used to exit the current function and optionally return a value.
+
+```zephyr
+fn sign(x: int) -> int {
+    if x > 0 { return  1; }
+    if x < 0 { return -1; }
+    return 0;
+}
+```
+
+---
+
+## Early Return and Chaining
+
+Zephyr provides concise syntax for managing early exit conditions.
+
+### Error Propagation (`?`)
+
+The `?` operator on a `Result<T>` expression returns `Err` early from the enclosing function if the result is an error.
+
+```zephyr
+fn load() -> Result<string> {
+    let data = read_file("input.txt")?;   // returns early on Err
+    return Ok(data);
+}
+```
+
+### Optional Chaining (`?.`)
+
+The `?.` operator short-circuits the entire expression to `nil` if any receiver in the chain is `nil`.
+
+```zephyr
+let tag = doc?.header?.title;
 ```

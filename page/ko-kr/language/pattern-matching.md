@@ -59,15 +59,17 @@ match p {
 ### 튜플 및 배열 패턴
 
 ```zephyr
-// 튜플 구조 분해
-match point {
-  (x, y) => x + y,
+// 튜플 구조 분해 및 값 매칭
+let pair = (true, 42);
+match pair {
+    (true, n)  => print(f"yes: {n}"),
+    (false, n) => print(f"no: {n}"),
 }
 
-// 배열 구조 조건 매칭
-match pair {
-  [lhs, rhs] => lhs + rhs,
-  _ => 0,
+// 배열 패턴 매칭
+match [1, 2, 3] {
+    [1, x, y] => print(f"1로 시작하여 {x}, {y}가 뒤따름"),
+    _         => print("기타"),
 }
 ```
 

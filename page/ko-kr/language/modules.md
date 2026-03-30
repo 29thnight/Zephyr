@@ -1,10 +1,10 @@
-# Modules & Packages
+# 모듈 및 패키지 (Modules & Packages)
 
-Zephyr 코드는 `.zph` 확장자를 가지는 모듈(Module) 단위로 논리적으로 분리되며, 명시적인 `import`/`export` 구문을 사용해 인터페이스를 개방합니다.
+Zephyr는 코드를 모듈 단위로 조직화합니다. 각 `.zph` 파일은 독립적인 모듈이며, `export` 키워드를 통해 다른 모듈에서 사용할 수 있도록 바인딩을 외부로 노출할 수 있습니다.
 
-## 내보내기 (Exporting)
+## 엑스포트 (Exporting)
 
-`export` 키워드를 사용하여 함수, 변수, 구조체, 열거형 등 모든 최상위 선언을 내보낼 수 있습니다.
+최상위 수준의 선언(함수, 변수, 구조체, 열거형 등)에 `export` 키워드를 붙여 내보낼 수 있습니다.
 
 ```zephyr
 // math.zph
@@ -12,18 +12,6 @@ export const PI = 3.14159;
 export fn square(x: float) -> float {
     return x * x;
 }
-```
-
-## 가져오기 (Importing)
-
-모듈은 여러 가지 구문을 통해 가져올 수 있습니다.
-
-### 기본 가져오기 (Default Import)
-대상 모듈에서 내보낸 모든 바인딩을 현재 스코프로 가져옵니다.
-
-```zephyr
-import "math";
-print(square(PI));
 ```
 
 ### 선택적 가져오기 (Named Import)

@@ -81,6 +81,28 @@ let c = Circle {
 
 ---
 
+## Trait Implementation
+
+Structs can implement traits to provide a shared interface.
+
+```zephyr
+trait Printable {
+    fn display(self) -> void;
+}
+
+impl Printable for Rect {
+    fn display(self) -> void {
+        print(f"Rect({self.width} x {self.height})");
+    }
+}
+
+r.display();   // Rect(10 x 5)
+```
+
+See the [Traits](./traits.md) page for full details.
+
+---
+
 ## Enums
 
 An `enum` defines a type that can be one of several variants.

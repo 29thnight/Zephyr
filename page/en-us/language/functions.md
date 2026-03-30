@@ -12,6 +12,27 @@ fn add(a: int, b: int) -> int {
 }
 ```
 
+### Void functions
+
+Implicit return type can be omitted with `-> void`:
+
+```zephyr
+fn log(msg: string) -> void {
+    print(msg);
+}
+```
+
+### Recursion
+
+Zephyr supports recursive function calls:
+
+```zephyr
+fn fibonacci(n: int) -> int {
+    if n < 2 { return n; }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+```
+
 ## Anonymous Closures
 
 Closures are function literals that can be assigned to variables or passed as arguments.
@@ -75,7 +96,40 @@ fn repeat(n: int, f: fn(int) -> void) -> void {
 repeat(3, fn(i: int) -> void {
     print(f"step {i}");
 });
-// step 0
-// step 1
-// step 2
 ```
+
+---
+
+## Associated Functions (Static Methods)
+
+Functions declared inside an `impl` block without a `self` parameter are called via `TypeName::name`.
+
+```zephyr
+struct Vec2 { x: float, y: float }
+
+impl Vec2 {
+    fn zero() -> Vec2 {
+        return Vec2 { x: 0.0, y: 0.0 };
+    }
+}
+
+let origin = Vec2::zero();
+```
+
+---
+
+## Generic Functions
+
+Functions can be parameterized over types. See the [Generics](./generics.md) page for full details.
+
+```zephyr
+fn identity<T>(x: T) -> T {
+    return x;
+}
+```
+
+---
+
+## Implementation Notes
+
+Captured variables in closures are promoted to GC-managed **upvalue cells**. This allows closures to outlive the scope where they were defined. In debug builds, the full lexical chain is retained for `EvalAstExpr` nodes, while release builds compact the upvalue chain.

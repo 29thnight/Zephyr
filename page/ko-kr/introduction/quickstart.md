@@ -73,3 +73,33 @@ fn main() -> void {
 zephyr run hello.zph
 # 출력: Hello, World!
 ```
+
+## 조금 더 복잡한 예제
+
+구조체와 트레이트를 활용한 예제입니다:
+
+```zephyr
+struct Vec2 {
+    x: float,
+    y: float,
+}
+
+trait Printable {
+    fn display(self) -> void;
+}
+
+impl Printable for Vec2 {
+    fn display(self) -> void {
+        print(f"Vec2({self.x}, {self.y})");
+    }
+}
+
+fn main() -> void {
+    let v = Vec2 { x: 1.0, y: 2.5 };
+    v.display();
+}
+```
+
+```
+Vec2(1, 2.5)
+```

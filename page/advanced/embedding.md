@@ -55,3 +55,19 @@ ZephyrValue fn_val = rt.get_value("update");
 ZephyrValue arg = ZephyrValue::from_float(0.016f);   // Submits Delta Time bindings
 rt.call(fn_val, {arg});
 ```
+
+## Coroutines from C++
+
+Zephyr allows direct manipulation of coroutines from the host environment, enabling seamless integration with engine update loops.
+
+```cpp
+auto co = rt.spawn_coroutine("patrol_ai");
+rt.pass_arg(co, entity_handle);
+
+// In engine update loop:
+while (!rt.query_coroutine(co).done) {
+    rt.resume(co, {});
+    engine.step();
+}
+rt.cancel_coroutine(co);
+```

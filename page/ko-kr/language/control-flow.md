@@ -111,3 +111,28 @@ for entry in scores {
     print(f"{entry.key}: {entry.value}");
 }
 ```
+
+---
+
+## 조기 반환 및 체이닝
+
+에러나 `nil` 상태를 보다 간결하게 처리하기 위한 제어 구문들입니다.
+
+### 에러 전파 (`?`)
+
+`Result<T>` 결과가 `Err`인 경우, 현재 함수를 즉시 종료하고 에러를 상위로 반환합니다.
+
+```zephyr
+fn load() -> Result<string> {
+    let data = read_file("input.txt")?;   // Err 발생 시 즉시 반환
+    return Ok(data);
+}
+```
+
+### 옵셔널 체이닝 (`?.`)
+
+참조하려는 대상이 `nil`인 경우, 이후의 연산을 수행하지 않고 전체 표현식의 결과를 `nil`로 반환합니다.
+
+```zephyr
+let tag = doc?.header?.title;
+```

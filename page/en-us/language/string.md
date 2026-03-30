@@ -21,12 +21,13 @@ let greeting = f"Hello, {name}!"; // "Hello, Alice!"
 
 ## Concatenation
 
+Use the `+` operator to join two or more strings together.
 
 ```zephyr
-let name = "Zephyr";
-let version = 2;
-print(f"Welcome to {name} v{version}");
-// Welcome to Zephyr v2
+let a = "Hello";
+let b = "World";
+let c = a + ", " + b + "!";
+print(c);   // Hello, World!
 ```
 
 Expressions of any type are automatically converted to their string representation:

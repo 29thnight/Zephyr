@@ -76,6 +76,28 @@ let dynamic_val: any = 42;
 dynamic_val = "now a string";
 ```
 
+## Imports & Exports
+
+Zephyr uses a module system where each file is a module.
+
+### Imports
+```zephyr
+import "std/math";                     // default import (all exports)
+import "utils" as u;                   // namespace alias
+import { sqrt, abs } from "std/math";  // named imports
+```
+
+### Exports
+```zephyr
+export fn greet(name: string) -> void {
+    print(f"Hello, {name}!");
+}
+
+export struct Point { x: float, y: float }
+```
+
+For more details, see the [Modules](./modules.md) page.
+
 ## Literals
 
 Supported literal forms natively tokenized by Zephyr:

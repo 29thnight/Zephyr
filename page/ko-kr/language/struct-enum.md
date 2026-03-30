@@ -81,6 +81,28 @@ let c = Circle {
 
 ---
 
+## 트레이트 구현 (Trait Implementation)
+
+구조체는 트레이트를 구현하여 공통 인터페이스를 제공할 수 있습니다.
+
+```zephyr
+trait Printable {
+    fn display(self) -> void;
+}
+
+impl Printable for Rect {
+    fn display(self) -> void {
+        print(f"Rect({self.width} x {self.height})");
+    }
+}
+
+r.display();   // Rect(10 x 5)
+```
+
+자세한 내용은 [트레이트](./traits.md) 페이지를 참조하세요.
+
+---
+
 ## 열거형 (Enums)
 
 `enum`은 여러 변체(Variants) 중 하나가 될 수 있는 타입을 정의하는 Sum Type입니다.

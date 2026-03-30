@@ -76,48 +76,32 @@ let dynamic_val: any = 42;
 dynamic_val = "이제 문자열입니다";
 ```
 
-## 연산자 (Operators)
+## 임포트 및 엑스포트 (Imports & Exports)
 
-Zephyr는 직관적인 산술, 논리 및 제어 연산자를 제공합니다.
+Zephyr는 각 파일이 독립적인 모듈인 모듈 시스템을 사용합니다.
 
-| 분류 | 연산자 목록 |
-|---|---|
-| **산술 (Arithmetic)** | `+`, `-`, `*`, `/`, `%`, 단항 `-` |
-| **비교 (Comparison)** | `==`, `!=`, `<`, `<=`, `>`, `>=` |
-| **논리 (Logical)** | `&&` (AND), `||` (OR), `!` (NOT) |
-| **할당 (Assignment)**| `=`, `+=`, `-=`, `*=`, `/=` |
-
-> [!NOTE]
-> `&&`와 `||` 연산자는 단락 평가(Short-circuit)를 통해 빠른 분기 연산을 보장합니다.
-
-### 옵셔널 체이닝 (`?.`)
-
-`?.` 연산자는 객체나 필드가 `nil`일 때 발생할 수 있는 참조 오류를 방지하고 연산을 `nil`로 단락시킵니다.
-
+### 임포트 (Imports)
 ```zephyr
-let name = user?.profile?.name;
+import "std/math";                     // 기본 임포트 (모든 export 포함)
+import "utils" as u;                   // 네임스페이스 별칭
+import { sqrt, abs } from "std/math";  // 명명된 임포트 (전용)
 ```
 
-### 오류 전파 (`?`)
-
-에러 처리를 간결하게 만들기 위해 `?`를 사용합니다. `Result<T>`를 평가할 때, 결과가 `Err`이면 현재 함수에서 즉시 실행을 멈추고 `Err`를 반환합니다.
-
+### 엑스포트 (Exports)
 ```zephyr
-fn load() -> Result<string> {
-    let content = read_file("data.json")?;
-    return Ok(content);
+export fn greet(name: string) -> void {
+    print(f"Hello, {name}!");
 }
+
+export struct Point { x: float, y: float }
 ```
 
-## 연산자 우선순위
+자세한 내용은 [모듈](./modules.md) 페이지를 참조하세요.
 
-연산자는 다음 순서대로 적용되며 상단일수록 우선순위가 높습니다. 괄호 `()`를 사용해 우선순위를 재지정할 수 있습니다.
+## 리터럴 (Literals)
 
-1. `!`, 단항 `-`
-2. `*`, `/`, `%`
-3. `+`, `-`
-4. `<`, `<=`, `>`, `>=`
-5. `==`, `!=`
-6. `&&`
-7. `||`
-8. `=`, `+=`, `-=`, `*=`, `/=`
+Zephyr에서 기본적으로 지원하는 리터럴 형태입니다:
+- **숫자**: `100`, `3.14`
+- **불리언 및 널**: `true`, `false`, `nil`
+- **배열**: `[1, 2, 3]`
+- **포맷팅 문자열 (f-string)**: `f"hp={value}"`

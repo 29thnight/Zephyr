@@ -6,15 +6,32 @@
 
 ## 함수 선언 (`fn`)
 
-함수는 `fn` 키워드로 시작하며, 반드시 파라미터의 타입과 반환 타입을 명시해야 합니다. 값을 반환하지 않는 함수는 리턴 타입을 `void`로 지정합니다.
+함수는 `fn` 키워드로 시작하며, 반드시 파라미터의 타입과 반환 타입을 명시해야 합니다.
 
 ```zephyr
 fn add(a: int, b: int) -> int {
     return a + b;
 }
+```
 
+## 반환 값이 없는 함수 (Void Functions)
+
+반환값이 없는 경우 `-> void`를 사용합니다.
+
+```zephyr
 fn log(msg: string) -> void {
     print(msg);
+}
+```
+
+## 재귀 함수 (Recursion)
+
+Zephyr는 재귀 호출을 지원합니다.
+
+```zephyr
+fn fibonacci(n: int) -> int {
+    if n < 2 { return n; }
+    return fibonacci(n - 1) + fibonacci(n - 2);
 }
 ```
 
@@ -102,7 +119,40 @@ fn repeat(n: int, f: fn(int) -> void) -> void {
 repeat(3, fn(i: int) -> void {
     print(f"step {i}");
 });
-// step 0
-// step 1
-// step 2
 ```
+
+---
+
+## 연관 함수 (Static Methods)
+
+`impl` 블록 내부에서 `self` 파라미터 없이 선언된 함수는 `타입명::함수명` 형태로 호출합니다.
+
+```zephyr
+struct Vec2 { x: float, y: float }
+
+impl Vec2 {
+    fn zero() -> Vec2 {
+        return Vec2 { x: 0.0, y: 0.0 };
+    }
+}
+
+let origin = Vec2::zero();
+```
+
+---
+
+## 제네릭 함수 (Generic Functions)
+
+함수는 타입에 대해 매개변수화될 수 있습니다. 자세한 내용은 [제네릭](./generics.md) 페이지를 참조하세요.
+
+```zephyr
+fn identity<T>(x: T) -> T {
+    return x;
+}
+```
+
+---
+
+## 구현 세부 사항 (Implementation)
+
+클로저에서 캡처된 변수들은 GC가 관리하는 **업밸류 셀(Upvalue Cells)**로 승격됩니다. 이를 통해 클로저가 정의된 스코프보다 오래 생존할 수 있습니다.

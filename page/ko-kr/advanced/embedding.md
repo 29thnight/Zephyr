@@ -55,3 +55,19 @@ ZephyrValue fn_val = rt.get_value("update");
 ZephyrValue arg = ZephyrValue::from_float(0.016f);   // delta time 전달
 rt.call(fn_val, {arg});
 ```
+
+## C++에서의 코루틴 제어
+
+Zephyr는 호스트 환경에서 코루틴을 직접 생성하고 제어할 수 있는 기능을 제공하여, 엔진의 업데이트 루프와 자연스럽게 통합될 수 있습니다.
+
+```cpp
+auto co = rt.spawn_coroutine("patrol_ai");
+rt.pass_arg(co, entity_handle);
+
+// 엔진 업데이트 루프 내에서:
+while (!rt.query_coroutine(co).done) {
+    rt.resume(co, {});
+    engine.step();
+}
+rt.cancel_coroutine(co);
+```

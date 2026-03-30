@@ -12,35 +12,103 @@ trait Drawable {
 }
 ```
 
-## Implementing a Trait
+## Traits
 
-To implement a trait for a specific type, use the `impl Trait for Type` syntax. The compiler ensures that all methods defined in the trait are present in the implementation block.
+Traits define a shared interface — a named set of method signatures that types must implement.
 
 ```zephyr
-struct Sprite {
-    id: int,
-    pos: Vec2,
+trait Animal {
+    fn sound(self) -> string;
+    fn name(self) -> string;
 }
+```
+
+## Implementing a Trait
+
+```zephyr
+struct Dog { breed: string }
+struct Cat { indoor: bool }
+
+impl Animal for Dog {
+    fn sound(self) -> string { return "Woof"; }
+    fn name(self)  -> string { return "Dog"; }
+}
+
+impl Animal for Cat {
+    fn sound(self) -> string { return "Meow"; }
+    fn name(self)  -> string { return "Cat"; }
+}
+```
+
+The compiler verifies that all trait methods are present in the `impl` block. A missing method is a compile-time error.
+
+### Calling Trait Methods
+
+```zephyr
+let d = Dog { breed: "Labrador" };
+print(d.sound());   // Woof
+print(d.name());    // Dog
+```
+
+---
+
+## Multiple Traits
+
+A type can implement any number of traits:
+
+```zephyr
+trait Drawable {
+    fn draw(self) -> void;
+}
+
+trait Resizable {
+    fn resize(self, factor: float) -> void;
+}
+
+struct Sprite { width: float, height: float }
 
 impl Drawable for Sprite {
     fn draw(self) -> void {
-        render_internal(self.id, self.pos);
+        print(f"Sprite({self.width}x{self.height})");
     }
+}
 
-    fn get_bounds(self) -> Rect {
-        return Rect { x: self.pos.x, y: self.pos.y, w: 32.0, h: 32.0 };
+impl Resizable for Sprite {
+    fn resize(self, factor: float) -> void {
+        // mutation logic
     }
 }
 ```
 
-## Trait Bounds (Generics)
+---
 
-Traits can be used as bounds for generic type parameters using the `where` clause. This ensures that the generic type `T` implements the required interface.
+## Trait Bounds (where clauses)
+
+Use `where` clauses to constrain generic type parameters to types that implement specific traits:
 
 ```zephyr
-fn render_all<T>(items: Array<T>) -> void where T: Drawable {
-    for item in items {
-        item.draw();
+trait Comparable {
+    fn less_than(self, other: Self) -> bool;
+}
+
+fn min<T>(a: T, b: T) -> T where T: Comparable {
+    if a.less_than(b) { return a; }
+    return b;
+}
+```
+
+---
+
+## impl without a Trait
+
+An `impl` block without a `for Trait` clause adds methods directly to a struct (often called "associated methods"):
+
+```zephyr
+struct Vec2 { x: float, y: float }
+
+impl Vec2 {
+    fn length(self) -> float {
+        return sqrt(self.x * self.x + self.y * self.y);
     }
 }
 ```
