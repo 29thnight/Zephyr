@@ -11,59 +11,57 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
-    i18nRouting: true,
-    // Social links removed as requested (Github icon removal)
     socialLinks: []
   },
 
   locales: {
-    'en-us': {
+    root: {
       label: 'English',
       lang: 'en-US',
       themeConfig: {
         nav: [
-          { text: 'Documentation', link: '/en-us/introduction/overview' },
+          { text: 'Documentation', link: '/introduction/overview' },
           { text: 'Github', link: 'https://github.com/29thnight/Zephyr' }
         ],
         sidebar: [
           {
             text: 'INTRODUCTION',
             items: [
-              { text: 'Overview', link: '/en-us/introduction/overview' },
-              { text: 'Getting Started', link: '/en-us/introduction/quickstart' }
+              { text: 'Overview', link: '/introduction/overview' },
+              { text: 'Getting Started', link: '/introduction/quickstart' }
             ]
           },
           {
             text: 'LANGUAGE GUIDE',
             items: [
-              { text: 'Syntax', link: '/en-us/language/syntax' },
-              { text: 'Types', link: '/en-us/language/types' },
-              { text: 'Declarations', link: '/en-us/language/declarations' },
-              { text: 'Struct & Enum', link: '/en-us/language/struct-enum' },
-              { text: 'Pattern Matching', link: '/en-us/language/pattern-matching' },
-              { text: 'Control Flow', link: '/en-us/language/control-flow' },
-              { text: 'Functions', link: '/en-us/language/functions' },
-              { text: 'Traits & Impl', link: '/en-us/language/traits' },
-              { text: 'Coroutines', link: '/en-us/language/coroutines' },
-              { text: 'Modules', link: '/en-us/language/modules' }
+              { text: 'Syntax', link: '/language/syntax' },
+              { text: 'Types', link: '/language/types' },
+              { text: 'Declarations', link: '/language/declarations' },
+              { text: 'Struct & Enum', link: '/language/struct-enum' },
+              { text: 'Pattern Matching', link: '/language/pattern-matching' },
+              { text: 'Control Flow', link: '/language/control-flow' },
+              { text: 'Functions', link: '/language/functions' },
+              { text: 'Traits & Impl', link: '/language/traits' },
+              { text: 'Coroutines', link: '/language/coroutines' },
+              { text: 'Modules', link: '/language/modules' }
             ]
           },
           {
             text: 'ADVANCED',
             items: [
-              { text: 'Embedding ZephyrVM', link: '/en-us/advanced/embedding' },
-              { text: 'C++ Class Bindings', link: '/en-us/advanced/bindings' },
-              { text: 'Host Handle Policy', link: '/en-us/advanced/host-handles' },
-              { text: 'Garbage Collection', link: '/en-us/advanced/garbage-collection' }
+              { text: 'Embedding ZephyrVM', link: '/advanced/embedding' },
+              { text: 'C++ Class Bindings', link: '/advanced/bindings' },
+              { text: 'Host Handle Policy', link: '/advanced/host-handles' },
+              { text: 'Garbage Collection', link: '/advanced/garbage-collection' }
             ]
           },
           {
             text: 'STANDARD LIBRARY',
             items: [
-              { text: 'Math & String', link: '/en-us/standard-library/math-string' },
-              { text: 'Collections', link: '/en-us/standard-library/collections' },
-              { text: 'JSON & I/O', link: '/en-us/standard-library/json-io' },
-              { text: 'GC & Profiler', link: '/en-us/standard-library/gc-profiler' }
+              { text: 'Math & String', link: '/standard-library/math-string' },
+              { text: 'Collections', link: '/standard-library/collections' },
+              { text: 'JSON & I/O', link: '/standard-library/json-io' },
+              { text: 'GC & Profiler', link: '/standard-library/gc-profiler' }
             ]
           }
         ]

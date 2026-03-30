@@ -24,9 +24,9 @@ sidebar: false
   locale="ko"
   tagline="게임 엔진을 위한 초고속 스크립트 언어"
   primaryText="문서 읽어보기"
-  primaryLink="/ko-kr/introduction/overview"
+  primaryLink="/Zephyr/ko-kr/introduction/overview"
   secondaryText="GitHub 방문하기"
-  secondaryLink="https://github.com/your-repo/project-zephyr"
+  secondaryLink="https://github.com/29thnight/Zephyr"
 />
 
 <ScrollFeatures
