@@ -19,7 +19,7 @@ export default defineConfig({
     'en-us': {
       label: 'English',
       lang: 'en-US',
-      link: '/en-us/',
+      link: '/Zephyr/en-us/',
       themeConfig: {
         nav: [
           { text: 'Documentation', link: '/en-us/introduction/overview' },
@@ -72,7 +72,7 @@ export default defineConfig({
     'ko-kr': {
       label: '한국어',
       lang: 'ko-KR',
-      link: '/ko-kr/',
+      link: '/Zephyr/ko-kr/',
       themeConfig: {
         nav: [
           { text: '문서', link: '/ko-kr/introduction/overview' },
