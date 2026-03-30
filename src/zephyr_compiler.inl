@@ -98,6 +98,8 @@ enum class BytecodeOp {
     R_SI_MUL_STORE,
     R_SI_CMP_JUMP_FALSE,
     R_SI_LOAD_ADD_STORE,
+    R_SPILL_LOAD,
+    R_SPILL_STORE,
 };
 
 struct BytecodeFunction;
@@ -320,6 +322,17 @@ inline int unpack_r_jump_target_operand(int operand) {
     return unpack_r_index_operand(operand);
 }
 
+// R_SPILL_LOAD / R_SPILL_STORE: (spill_idx << 8) | reg
+inline int pack_r_spill_operand(std::uint8_t reg, int spill_idx) {
+    return (spill_idx << 8) | static_cast<int>(reg);
+}
+inline std::uint8_t unpack_r_spill_reg(int operand) {
+    return static_cast<std::uint8_t>(operand & 0xFF);
+}
+inline int unpack_r_spill_idx(int operand) {
+    return static_cast<int>(static_cast<std::uint32_t>(operand) >> 8);
+}
+
 inline bool is_register_comparison_op(BytecodeOp op) {
     return op == BytecodeOp::R_LT || op == BytecodeOp::R_LE ||
            op == BytecodeOp::R_GT || op == BytecodeOp::R_GE ||
@@ -415,6 +428,7 @@ struct BytecodeFunction {
     bool is_coroutine_body = false;
     bool uses_register_mode = false;
     int max_regs = 0;
+    int spill_count = 0;
 };
 
 class RegisterAllocator {
@@ -608,6 +622,8 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_SI_MUL_STORE: return "R_SI_MUL_STORE";
         case BytecodeOp::R_SI_CMP_JUMP_FALSE: return "R_SI_CMP_JUMP_FALSE";
         case BytecodeOp::R_SI_LOAD_ADD_STORE: return "R_SI_LOAD_ADD_STORE";
+        case BytecodeOp::R_SPILL_LOAD: return "R_SPILL_LOAD";
+        case BytecodeOp::R_SPILL_STORE: return "R_SPILL_STORE";
     }
     return "Unknown";
 }
@@ -849,6 +865,7 @@ struct CoroutineFrameState {
     std::vector<std::uint64_t> local_cards;   // Phase 3.3: bitmap
     std::vector<Value> regs;
     std::vector<std::uint64_t> reg_cards;
+    std::vector<Value> spill_regs;
     std::size_t ip = 0;
     std::size_t ip_index = 0;
     bool uses_register_mode = false;
@@ -960,7 +977,7 @@ struct HostModuleRecord {
 
 namespace bytecode_cache {
 
-constexpr std::uint32_t kFormatVersion = 1;
+constexpr std::uint32_t kFormatVersion = 2;
 
 inline void append_u8(std::vector<std::uint8_t>& out, std::uint8_t value) {
     out.push_back(value);
@@ -1190,6 +1207,7 @@ inline void serialize_function(const BytecodeFunction& function, std::vector<std
     append_bool(out, function.is_coroutine_body);
     append_bool(out, function.uses_register_mode);
     append_i32(out, function.max_regs);
+    append_i32(out, function.spill_count);
 }
 
 inline bool deserialize_function(const std::vector<std::uint8_t>& data, std::size_t& offset, BytecodeFunction& function) {
@@ -1321,7 +1339,8 @@ inline bool deserialize_function(const std::vector<std::uint8_t>& data, std::siz
         !read_bool(data, offset, function.uses_only_locals_and_upvalues) ||
         !read_bool(data, offset, function.is_coroutine_body) ||
         !read_bool(data, offset, function.uses_register_mode) ||
-        !read_i32(data, offset, function.max_regs)) {
+        !read_i32(data, offset, function.max_regs) ||
+        !read_i32(data, offset, function.spill_count)) {
         return false;
     }
     function.total_original_opcode_count = static_cast<std::size_t>(total_original_opcode_count);
@@ -3531,6 +3550,12 @@ inline int recompute_register_max(const BytecodeFunction& function) {
                 note_reg(unpack_r_si_load_add_store_dst(instruction.operand));
                 note_reg(unpack_r_si_load_add_store_local_src(instruction.operand));
                 break;
+            case BytecodeOp::R_SPILL_LOAD:
+                note_reg(unpack_r_spill_reg(instruction.operand));
+                break;
+            case BytecodeOp::R_SPILL_STORE:
+                note_reg(unpack_r_spill_reg(instruction.operand));
+                break;
             default:
                 break;
         }
@@ -4323,15 +4348,16 @@ private:
         for (const Param& param : params) {
             define_local_slot(param.name);
         }
-        register_allocator_.reserve_pinned(next_slot_);
+        register_allocator_.reserve_pinned(std::min(next_slot_, 256));
         compile_block_r(body);
         if (!register_compile_failed_) {
             const std::uint8_t result_reg = compile_nil_r(body->span);
             emit_r(BytecodeOp::R_RETURN, body->span, 0, result_reg);
             register_allocator_.free_temp(result_reg);
         }
-        function_->local_count = next_slot_;
-        function_->max_regs = std::max(next_slot_, register_allocator_.max_regs);
+        function_->local_count = std::min(next_slot_, 256);
+        function_->spill_count = std::max(0, next_slot_ - 256);
+        function_->max_regs = std::max(std::min(next_slot_, 256), register_allocator_.max_regs);
         function_->uses_only_locals_and_upvalues = false;
         exit_local_scope();
         if (register_compile_failed_) {
@@ -4511,6 +4537,30 @@ private:
 
     void emit_r_binop(BytecodeOp op, const Span& span, std::uint8_t dst, std::uint8_t src1, std::uint8_t src2) {
         emit_r(op, span, dst, src1, src2);
+    }
+
+    void emit_r_spill_load(const Span& span, std::uint8_t dst, int spill_idx) {
+        const int packed_operand = pack_r_spill_operand(dst, spill_idx);
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_SPILL_LOAD;
+        instruction.operand = packed_operand;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(std::move(instruction));
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_SPILL_LOAD)];
+    }
+
+    void emit_r_spill_store(const Span& span, int spill_idx, std::uint8_t src) {
+        const int packed_operand = pack_r_spill_operand(src, spill_idx);
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_SPILL_STORE;
+        instruction.operand = packed_operand;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(std::move(instruction));
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_SPILL_STORE)];
     }
 
     std::string make_temp_name(const char* prefix) {
@@ -4742,7 +4792,13 @@ private:
 
     std::optional<std::uint8_t> emit_load_symbol_r(const std::string& name, const Span& span) {
         if (const auto slot = resolve_local_slot(name); slot.has_value()) {
-            return static_cast<std::uint8_t>(*slot);
+            if (*slot < 256) {
+                return static_cast<std::uint8_t>(*slot);
+            }
+            // spill slot — load into a temporary register
+            const std::uint8_t tmp = register_allocator_.alloc_temp();
+            emit_r_spill_load(span, tmp, *slot - 256);
+            return tmp;
         }
         if (resolve_upvalue_slot(name).has_value()) {
             fail_register_compile();
@@ -4972,12 +5028,17 @@ private:
                 return std::nullopt;
             }
             if (const auto slot = resolve_local_slot(variable->name); slot.has_value()) {
-                const std::uint8_t dst = static_cast<std::uint8_t>(*slot);
-                if (*value_reg != dst) {
-                    emit_r(BytecodeOp::R_MOVE, assign->span, dst, *value_reg);
-                    register_allocator_.free_temp(*value_reg);
+                if (*slot < 256) {
+                    const std::uint8_t dst = static_cast<std::uint8_t>(*slot);
+                    if (*value_reg != dst) {
+                        emit_r(BytecodeOp::R_MOVE, assign->span, dst, *value_reg);
+                        register_allocator_.free_temp(*value_reg);
+                    }
+                    return dst;
                 }
-                return dst;
+                // spill slot — store and keep value_reg as result
+                emit_r_spill_store(assign->span, *slot - 256, *value_reg);
+                return value_reg;
             }
             emit_r_store_global(assign->span, add_global_slot(variable->name), *value_reg);
             return value_reg;
@@ -5007,10 +5068,17 @@ private:
             if (!value_reg.has_value()) {
                 return;
             }
-            const std::uint8_t dst = static_cast<std::uint8_t>(define_local_slot(let_stmt->name));
-            register_allocator_.reserve_pinned(next_slot_);
-            if (*value_reg != dst) {
-                emit_r(BytecodeOp::R_MOVE, let_stmt->span, dst, *value_reg);
+            const int slot = define_local_slot(let_stmt->name);
+            register_allocator_.reserve_pinned(std::min(next_slot_, 256));
+            if (slot < 256) {
+                const std::uint8_t dst = static_cast<std::uint8_t>(slot);
+                if (*value_reg != dst) {
+                    emit_r(BytecodeOp::R_MOVE, let_stmt->span, dst, *value_reg);
+                    register_allocator_.free_temp(*value_reg);
+                }
+            } else {
+                // spill slot — store RHS into spill memory
+                emit_r_spill_store(let_stmt->span, slot - 256, *value_reg);
                 register_allocator_.free_temp(*value_reg);
             }
             return;

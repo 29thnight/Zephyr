@@ -213,6 +213,9 @@ void CoroutineObject::trace(Runtime& runtime) {
         for (int i = 0; i < frame.reg_count; ++i) {
             runtime.mark_value(frame.inline_regs[i]);
         }
+        for (const auto& value : frame.spill_regs) {
+            runtime.mark_value(value);
+        }
     }
 }
 
@@ -2330,6 +2333,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
 
     ScopedVectorItem<const std::vector<Value>*> regs_root(rooted_value_vectors_, &regs);
 
+    std::vector<Value> spill(static_cast<std::size_t>(std::max(chunk.spill_count, 0)), Value::nil());
+    ScopedVectorItem<const std::vector<Value>*> spill_root(rooted_value_vectors_, &spill);
+    Value* __restrict spill_ptr = spill.empty() ? nullptr : spill.data();
+
     auto register_index = [&](std::uint8_t reg, const Span& span) -> RuntimeResult<std::size_t> {
         if (static_cast<std::size_t>(reg) >= regs.size()) {
             return make_loc_error<std::size_t>(module.name, span, "Invalid register access.");
@@ -2846,6 +2853,20 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ZEPHYR_TRY_ASSIGN(cv_checked, load_bytecode_constant(chunk, static_cast<int>(las_const)));
                 ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, lhs, cv_checked, span));
                 regs_ptr[las_dst] = result; }
+                ++ip;
+                break;
+            }
+            case BytecodeOp::R_SPILL_LOAD: {
+                const std::uint8_t dst = unpack_r_spill_reg(instruction.operand);
+                const int sidx = unpack_r_spill_idx(instruction.operand);
+                regs_ptr[dst] = spill_ptr[sidx];
+                ++ip;
+                break;
+            }
+            case BytecodeOp::R_SPILL_STORE: {
+                const std::uint8_t src = unpack_r_spill_reg(instruction.operand);
+                const int sidx = unpack_r_spill_idx(instruction.operand);
+                spill_ptr[sidx] = regs_ptr[src];
                 ++ip;
                 break;
             }
@@ -4571,6 +4592,11 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         ? frame_ptr->inline_regs
         : frame_ptr->regs.data();
 
+    if (static_cast<int>(frame_ptr->spill_regs.size()) < chunk.spill_count) {
+        frame_ptr->spill_regs.assign(static_cast<std::size_t>(chunk.spill_count), Value::nil());
+    }
+    Value* __restrict spill_ptr = frame_ptr->spill_regs.empty() ? nullptr : frame_ptr->spill_regs.data();
+
     const CompactInstruction* __restrict instrs_ptr = chunk.instructions.data();
     const InstructionMetadata* const metadata_ptr = chunk.metadata.data();
     const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
@@ -4605,6 +4631,7 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         frame_ptr->local_cards.clear();
         frame_ptr->regs.clear();
         frame_ptr->reg_cards.clear();
+        frame_ptr->spill_regs.clear();
         frame_ptr->reg_count = 0;
         frame_ptr->current_env = nullptr;
         frame_ptr->root_env = nullptr;
@@ -4934,6 +4961,18 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
               ZEPHYR_TRY_ASSIGN(cv, load_bytecode_constant(chunk, las_const));
               ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Plus, src_val, cv, s, module_name));
               regs_ptr[las_dst] = r; }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SPILL_LOAD: {
+            const std::uint8_t dst = unpack_r_spill_reg(instr.operand);
+            const int sidx = unpack_r_spill_idx(instr.operand);
+            regs_ptr[dst] = spill_ptr[sidx];
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_SPILL_STORE: {
+            const std::uint8_t src = unpack_r_spill_reg(instr.operand);
+            const int sidx = unpack_r_spill_idx(instr.operand);
+            spill_ptr[sidx] = regs_ptr[src];
             ++local_ip; break;
         }
         case BytecodeOp::R_YIELD: {
