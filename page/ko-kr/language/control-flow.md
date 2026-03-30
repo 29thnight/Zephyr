@@ -71,34 +71,20 @@ for i in 0..=5 {
 for item in values {
   print(item);
 }
-for i in 0..n {
-  print(i);
-}
-
-// 이하 (포함) 범위
-for i in 0..=n {
-  print(i);
-}
 ```
 
-## 루프 제어 (Break & Continue)
+## 루프 및 반환 제어
 
-루프 중단을 원하면 `break`를, 현재 반복 주기를 건너뛰고자 할 때는 `continue`를 사용합니다:
+- `break`: 가장 안쪽 루프를 즉시 탈출합니다.
+- `continue`: 현재 반복을 건너뛰고 다음 반복 주기로 넘어갑니다.
+- `return`: 속해 있는 함수를 종료하며 특정 값을 호출자에게 반환합니다.
 
 ```zephyr
-mut i = 0;
-while true {
-    if i >= 3 { break; } // 루프 전체 종료
-    print(i);
-    i += 1;
+fn sign(x: int) -> int {
+    if x > 0 { return  1; }
+    if x < 0 { return -1; }
+    return 0;
 }
-// 0 1 2
-
-for i in 0..6 {
-    if i % 2 == 0 { continue; } // 다음 주기로 즉시 건너뜀
-    print(i);
-}
-// 1 3 5
 ```
 
 ## 이터레이터 프로토콜 (Iterator Protocol)

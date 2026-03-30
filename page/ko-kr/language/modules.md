@@ -1,11 +1,6 @@
-# Modules & Imports
+# Modules & Packages
 
-길어지는 로직과 소스들을 역할 단위 객체로 패키징할 수 있습니다.
-
-## 스크립트 모듈 연동
-# 모듈과 패키지 (Modules and Packages)
-
-Zephyr는 코드를 모듈 단위로 구성합니다. 각 `.zph` 파일은 독립적인 모듈이며, 다른 모듈에서 사용할 수 있도록 자신의 바인딩을 내보낼 수 있습니다.
+Zephyr 코드는 `.zph` 확장자를 가지는 모듈(Module) 단위로 논리적으로 분리되며, 명시적인 `import`/`export` 구문을 사용해 인터페이스를 개방합니다.
 
 ## 내보내기 (Exporting)
 
@@ -38,7 +33,7 @@ print(square(PI));
 import { square } from "math";
 ```
 
-### 네임스페이스 에일리언스 (Namespace Alias)
+### 네임스페이스 에일리어스 (Namespace Alias)
 모든 바인딩을 특정 접두사(Namespace) 아래로 가져옵니다.
 
 ```zephyr
@@ -46,7 +41,7 @@ import "math" as m;
 print(m.square(10.0));
 ```
 
-## 재해출 (Re-exporting)
+## 재수출 (Re-exporting)
 
 모듈은 다른 모듈의 바인딩을 다시 내보냄으로써 게이트웨이 역할을 할 수 있습니다.
 
@@ -56,28 +51,49 @@ export { square } from "math";
 export { Vec2 } from "geometry";
 ```
 
-## 호스트 모듈 (Host Modules)
+## 호스트 C++ 제공 모듈
 
-C++ 호스트는 Zephyr 스크립트에서 일반 모듈처럼 가져올 수 있는 네이티브 모듈을 등록할 수 있습니다. 주로 엔진 API를 제공하는 데 사용됩니다.
+C++ 엔진 코드에서 동적으로 모듈을 주입할 수 있습니다. 바인딩된 모듈은 Zephyr 스크립트 상에서 동일하게 `import` 할 수 있습니다.
 
-```zephyr
-import "engine"; // C++ VM API를 통해 등록됨
-let entity = engine.spawn("player");
+```cpp
+vm.register_module("engine", [](ZephyrRuntime& rt) {
+    rt.set_function("spawn", spawn_entity);
+});
 ```
 
-## 패키지 해결 (Package Resolution)
+```zephyr
+import "engine";
+let e = spawn("player");
+```
 
-여러 파일로 구성된 프로젝트의 경우, 루트에 있는 `package.toml` 파일이 패키지 구조를 설명합니다.
+## 모듈 바이트코드 캐싱
+
+Zephyr 컴파일러는 `.zph` 모듈을 파싱한 후 동일한 디렉토리에 `.zphc` 형태의 바이트코드 캐시 파일을 생성합니다. 소스 파일의 mtime(수정 시간)을 비교해 변경사항이 없을 경우 구문 분석(AST 변환)과 타입을 재검증하지 않고 캐시된 바이트코드를 즉각 로딩하여 매우 빠른 구동 속도를 보장합니다.
+
+## Package 구성 (`package.toml`)
+
+다중 패키지 프로젝트를 구성할 때는 패키지 매니페스트(`package.toml`)가 사용됩니다.
 
 ```toml
 [package]
-name = "game_core"
-version = "1.0.0"
+name = "my_game"
+version = "0.1.0"
 entry = "src/main.zph"
+
+[dependencies]
+math = "std/math"
+utils = "src/utils"
 ```
 
-VM은 호스트 API(`set_package_root`)를 통해 정의된 패키지 루트를 기준으로 임포트 경로를 해결합니다.
+호스트에서 `ZephyrVM::set_package_root()`를 호출하면 매니페스트를 참고하여 최상위 진입점을 설정하게 됩니다.
 
-## 바이트코드 캐싱
+## 표준 라이브러리 (`std/*`)
 
-로드 시간을 최적화하기 위해 Zephyr는 소스 파일을 바이트코드로 자동 컴파일하고 `.zphc` 파일로 캐싱합니다. 소스 파일의 수정 시간이 변경되면 캐시는 자동으로 무효화됩니다.
+Zephyr는 게임 스크립팅에 필수적인 표준 라이브러리를 기본 제공합니다.
+- `std/math`: `sqrt`, `abs`, `lerp`, `clamp`, `sin`, `cos` (수치 연산)
+- `std/string`: `split`, `trim`, `replace`, `to_upper` (텍스트 가공)
+- `std/collections`: `Map<K,V>`, `Set<T>`, `Queue<T>`, `Stack<T>` (자료구조)
+- `std/json`: `parse(s: string) -> Result<any>`, `stringify(v: any) -> string`
+- `std/io`: `read_file`, `write_file`
+- `std/gc`, `std/profiler`: 프로세스 상태 수명 제어 및 벤치마킹 도구
+>>>>>>> ccc482111dc8b21cc19b373b1b97e7c97dcc1dbc

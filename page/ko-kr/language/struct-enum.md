@@ -1,14 +1,10 @@
-# Struct & Enum
-
-Zephyr는 데이터 레코드를 위한 구조체(Structs)와 합 타입(Sum types)을 위한 열거형(Enums)을 사용합니다. 이는 데이터와 상태를 조직화하는 핵심 도구입니다.
-
-## 구조체와 열거형 (Structs and Enums)
+# 구조체와 열거형 (Structs and Enums)
 
 Zephyr는 데이터 레코드를 위한 구조체(Structs)와 합 타입(Sum types)을 위한 열거형(Enums)을 사용합니다. 이는 데이터와 상태를 조직화하는 핵심 도구입니다.
 
 ## 구조체 (Structs)
 
-`struct`는 명명된 타입 필드들의 집합입니다.
+`struct`는 명명된 타입 필드들의 집합입니다. 구조체를 선언하고 인스턴스를 만들 때는 모든 필드를 명시해야 하며, 기본값 기능은 없습니다.
 
 ```zephyr
 struct Vec2 {
@@ -32,7 +28,7 @@ let origin = Vec2 { x, y };
 
 ### 필드 접근 및 수정
 
-점(.) 표기법을 사용하여 필드에 접근합니다. 값을 수정하려면 `mut` 바인딩이 필요합니다.
+점(.) 표기법을 사용하여 필드에 접근합니다. 변수가 가변(`mut`)으로 선언되었다면 구조체의 필드도 수정 가능합니다.
 
 ```zephyr
 mut player_pos = Vec2 { x: 0.0, y: 0.0 };
@@ -42,7 +38,7 @@ print(player_pos.x); // 100
 
 ### 메서드 (impl)
 
-`impl` 블록을 사용하여 구조체에 동작을 추가할 수 있습니다. 메서드는 `self`를 첫 번째 파라미터로 받습니다.
+`impl` 블록을 사용하여 구조체에 동작을 추가할 수 있습니다. 메서드는 `self`를 첫 번째 파라미터로 명시적으로 받아야 합니다.
 
 ```zephyr
 struct Rect {
@@ -87,7 +83,7 @@ let c = Circle {
 
 ## 열거형 (Enums)
 
-`enum`은 여러 변체(Variants) 중 하나가 될 수 있는 타입을 정의합니다.
+`enum`은 여러 변체(Variants) 중 하나가 될 수 있는 타입을 정의하는 Sum Type입니다.
 
 ```zephyr
 enum Color {
@@ -116,7 +112,7 @@ let s2 = Shape::Rect(10.0, 20.0);
 
 ### 패턴 매칭 (Pattern Matching)
 
-열거형은 주로 `match` 표현식을 사용하여 해체됩니다.
+열거형은 주로 `match` 표현식을 사용하여 해체됩니다. 구조 분해 및 분기 로직 처리를 위해 강력한 시너지를 일으킵니다.
 
 ```zephyr
 fn get_area(s: Shape) -> float {
@@ -128,9 +124,9 @@ fn get_area(s: Shape) -> float {
 }
 ```
 
-### Result\<T\>
+### 내장 열거형: `Result<T>`
 
-`Result<T>`는 에러 처리를 위해 사용되는 내장 열거형입니다.
+`Result<T>`는 에러 처리를 위해 사용되는 내장 열거형입니다. 성공 시 `Ok(T)`, 실패 시 `Err(string)`을 담습니다.
 
 ```zephyr
 enum Result<T> {

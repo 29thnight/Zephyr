@@ -1,9 +1,10 @@
-# Traits & Impl
+# 트레이트 및 제네릭 (Traits & Generics)
 
-다형성과 인터페이스 기반 설계를 제공하기 위한 기능입니다.
+타입 간의 공통된 행위를 정의하는 `trait`와, 타입에 구애받지 않고 유연한 코드를 작성할 수 있게 하는 제네릭(`Generics`) 기능을 제공합니다.
 
-## 역할 선언 (`trait`)
-특정 타입들이 반드시 구현해야 하는 고유의 동작(메서드 규격)을 선언합니다. C++의 순수 가상 함수와 비슷한 역할을 담당합니다.
+## 트레이트 (Trait)
+
+트레이트는 특정 타입이 반드시 구현해야 하는 메서드 시그니처들의 집합(인터페이스)을 정의합니다.
 
 ```zephyr
 trait Drawable {
@@ -12,9 +13,9 @@ trait Drawable {
 }
 ```
 
-## 트레이트 구현
+### 트레이트 구현 (`impl`)
 
-특정 타입에 대해 트레이트를 구현하려면 `impl Trait for Type` 구문을 사용합니다. 컴파일러는 트레이트에 정의된 모든 메서드가 구현 블록에 존재하는지 확인합니다.
+특정 타입에 대해 트레이트를 구현하려면 `impl Trait for Type` 구문을 사용합니다. 컴파일러는 트레이트에 정의된 모든 메서드가 구현 블록에 존재하는지 확인(Semacheck)합니다.
 
 ```zephyr
 struct Sprite {
@@ -33,35 +34,43 @@ impl Drawable for Sprite {
 }
 ```
 
-## 트레이트 경계 (Trait Bounds)
+## 제네릭 (Generics)
 
-제네릭 타입 파라미터에 `where` 절을 사용하여 특정 트레이트를 구현해야 한다는 제약을 걸 수 있습니다. 이를 통해 제네릭 타입 `T`가 필요한 인터페이스를 갖추고 있음을 보장합니다.
+함수나 구조체를 특정 타입에 종속되지 않는 범용적인 형태로 작성할 수 있습니다. 런타임 캐스팅이 발생하는 것이 아니라, 컴파일 타임에 사용된 타입별로 구체화된 바이트코드(Monomorphisation)를 생성합니다.
 
 ```zephyr
-fn render_all<T>(items: Array<T>) -> void where T: Drawable {
-    for item in items {
-        item.draw();
-    }
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+print(identity(42));        // 42 (int)
+print(identity("hello"));   // hello (string)
+```
+
+```zephyr
+// 제네릭 구조체
+struct Pair<A, B> {
+    first: A,
+    second: B,
 }
 ```
 
-## 다중 트레이트 구현 (Multiple Traits)
+### 제약 조건 (`where`)
 
-하나의 타입은 필요한 기능적 요구사항을 충족하기 위해 여러 개의 트레이트를 동시에 구현할 수 있습니다.
+제네릭 타입 매개변수가 특정한 트레이트를 구현하도록 `where` 절을 통해 조건을 걸 수 있습니다. 이를 통해 제네릭 타입 `T`가 필요한 인터페이스를 갖추고 있음을 보장합니다.
 
 ```zephyr
-trait Scalable {
-    fn scale(self, factor: float) -> void;
+trait Comparable {
+    fn less_than(self, other: Self) -> bool;
 }
 
-impl Scalable for Sprite {
-    fn scale(self, factor: float) -> void {
-        // 크기 조절 로직
-    }
+fn min<T>(a: T, b: T) -> T where T: Comparable {
+    if a.less_than(b) { return a; }
+    return b;
 }
-
-// Sprite는 Drawable과 Scalable 트레이트를 모두 구현한 상태가 됩니다.
 ```
+
+`+` 기호를 사용하여 여러 트레이트를 묶어서 제약 조건을 지정할 수도 있습니다. (예: `where T: Printable + Comparable`)
 
 ## Self 타입
 
