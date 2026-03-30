@@ -1,5 +1,5 @@
 /* =========================================
-   FORCE LIGHT MODE — no .dark overrides
+   FORCE LIGHT MODE
    ========================================= */
 :root {
   --vp-c-brand-1: #00c07a;
@@ -7,31 +7,34 @@
   --vp-c-brand-3: #4ade80;
   --vp-font-family-base: 'Inter', 'Noto Sans KR', sans-serif;
 
-  /* Override VitePress dark bg to white */
   --vp-c-bg: #ffffff;
   --vp-c-bg-soft: #f6f8fa;
   --vp-c-bg-mute: #f0f2f5;
   --vp-c-text-1: #1a1a1a;
   --vp-c-text-2: #444;
   --vp-nav-bg-color: rgba(255, 255, 255, 0.98);
-  --vp-sidebar-bg-color: #f6f8fa;
+  --vp-sidebar-bg-color: #ffffff;
 
-  /* Global Divider/Gutter Reset */
   --vp-c-divider: transparent !important;
   --vp-c-gutter: transparent !important;
   --vp-nav-border-color: transparent !important;
   --vp-c-bg-nav: #ffffff !important;
 }
 
-/* =========================================
-   NAVBAR CUSTOMIZATION (GOOGLE ANTIGRAVITY STYLE - DEFINITIVE FINAL FIX)
-   ========================================= */
+/* =====================================================================
+   NAVBAR — FINAL FIX
+   
+   Target layout (like Google Antigravity screenshot 3):
+   [Logo] [Menu1] [Menu2] ──────────── [Search] [Lang]
+   
+   Must NOT overflow on any viewport width.
+   ===================================================================== */
 
-/* 1. ABSOLUTE SHADOW & BORDER REMOVAL */
-.VPNavBar, 
-.VPNav, 
-.VPNavBarTitle, 
-.VPNavBarContainer, 
+/* ── Reset borders/shadows + white background ── */
+.VPNavBar,
+.VPNav,
+.VPNavBarTitle,
+.VPNavBarContainer,
 .divider,
 .VPNavBar::after,
 .VPNavBar::before,
@@ -44,110 +47,151 @@
   outline: none !important;
 }
 
-/* 2. Logo / Title container */
-.VPNavBarTitle .title {
-  display: flex !important;
-  align-items: center !important;
-  border-bottom: none !important;
-  width: auto !important;
-  position: relative !important; /* Ensure it stays in flex flow */
-}
-
-.VPNavBarTitle .title > :not(.brand-logo) {
-  display: none !important;
-}
-
-
-/* 3. Layout: [Logo] [Menu Links] ---- [Search] [Translations] */
-/* FORCE THE ENTIRE NAVBAR HIERARCHY TO 100% VIEWPORT WIDTH - STRUCTURAL ONLY */
-.VPNav,
+/* ── Navbar white background ── */
 .VPNavBar,
 .VPNavBar .wrapper,
 .VPNavBar .container,
-.VPNavBar .content,
-.VPNavBar .content-body {
+.VPNavBar .container > .title {
+  background-color: #ffffff !important;
+}
+
+/* ── Hide default VitePress site title text (BrandLogo slot replaces it) ── */
+.VPNavBarTitle .title > :not(.brand-logo) {
+  display: none !important;
+}
+.VPNavBarTitle .title {
+  border-bottom: none !important;
+}
+
+/* ── STRUCTURAL RESET ──
+   VitePress internally does two things on sidebar pages:
+   1) .title  { position: absolute; width: var(--vp-sidebar-width); left: 0 }
+   2) .content { padding-left: var(--vp-sidebar-width) }
+   
+   This separates logo from menu. We MUST override both. */
+
+/* Make every wrapper stretch to 100% and be a plain block. */
+.VPNav {
+  max-width: none !important;
+  width: 100% !important;
+}
+
+.VPNavBar {
+  max-width: none !important;
+  width: 100% !important;
+}
+
+.VPNavBar > .wrapper {
   max-width: none !important;
   width: 100% !important;
   margin: 0 !important;
   padding: 0 !important;
-  left: 0 !important;
-  box-sizing: border-box !important;
 }
 
-/* Use inner padding for safe element spacing */
-.VPNavBar .container {
-    padding: 0 40px !important;
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-}
-
-/* Control elements width to prevent overlap */
-.VPNavBar .title,
-.VPNavBarMenu,
-.VPNavBarSearch,
-.VPNavBarTranslations {
-    width: auto !important; /* RESET FROM 100% */
-    flex: 0 0 auto !important;
-}
-
-/* Logo (Leftmost) */
-.VPNavBarTitle {
-    margin-right: 2rem !important;
-    order: 1 !important;
-    flex: 0 0 auto !important;
-    position: relative !important;
-}
-
-/* Menu items (Documentation, Github) - Next to Logo */
-.VPNavBarMenu {
-  order: 2 !important;
-  display: flex !important;
-  margin: 0 !important;
-  margin-left: 1rem !important; /* Healthy gap from Logo */
-  border-bottom: none !important;
-  flex: 0 0 auto !important;
-}
-
-/* Sidebar Specific Adjustment: Prevent Overlap */
-.VPNavBar.has-sidebar .VPNavBarTitle {
-  margin-right: 2.5rem !important;
-}
-
+/* The .container is the key flex parent.
+   It holds .title and .content side by side. */
+.VPNavBar .container,
 .VPNavBar.has-sidebar .container {
-  padding-left: 272px !important; /* Matches --vp-sidebar-width */
+  max-width: 1440px !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  padding: 0 24px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important;
+}
+
+/* ── LOGO (.title inside .container) ──
+   Force it into static flex flow. VitePress makes this absolute on sidebar pages. */
+.VPNavBar .container > .title,
+.VPNavBar.has-sidebar .container > .title {
+  position: static !important;
+  width: auto !important;
+  max-width: none !important;
+  flex: 0 0 auto !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  z-index: 1;
+}
+
+/* ── CONTENT (.content inside .container) ──
+   Must fill the remaining space, NO left offset. */
+.VPNavBar .container > .content,
+.VPNavBar.has-sidebar .container > .content {
+  position: static !important;
+  width: auto !important;
+  max-width: none !important;
+  flex: 1 1 0% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  padding-left: 0 !important;
+  margin-left: 0 !important;
   display: flex !important;
   align-items: center !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
 }
 
-.VPNavBar.has-sidebar .content {
-  flex: 1 1 auto !important;
+/* content-body: the inner wrapper for menu/search/lang */
+.VPNavBar .content-body {
+  max-width: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  min-width: 0 !important;
 }
 
+/* ── MENU (nav links) ──
+   Must always be visible on desktop and sit right after logo.
+   VitePress hides it above 960px when sidebar is present — override that. */
+.VPNavBarMenu {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  flex: 0 0 auto !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  order: 1 !important;
+}
 
-
-/* SEARCH & TRANSLATIONS (ATTACHED TOGETHER ON THE FAR RIGHT) */
-/* We use margin-left: auto on the FIRST item of the right-hand group (Search) 
-   to push Search and Language to the FAR RIGHT edge */
+/* ── SEARCH — push to far right ── */
 .VPNavBarSearch {
   order: 10 !important;
-  margin-left: auto !important; /* THE KEY: Push everything to right */
+  flex: 0 1 auto !important;
+  margin-left: auto !important;
   display: flex !important;
   align-items: center !important;
+  min-width: 0 !important;
 }
 
+/* ── TRANSLATIONS (language picker) ── */
 .VPNavBarTranslations {
   order: 11 !important;
+  flex: 0 0 auto !important;
   display: flex !important;
-  margin-left: 10px !important; /* Close attachment to Search */
+  margin-left: 8px !important;
   visibility: visible !important;
 }
 
-/* Clean up hidden elements that might cause gaps or layout shifts */
-.VPNavBarSocialLinks, 
+/* ── HAMBURGER — only show on mobile ── */
+.VPNavBar .hamburger {
+  order: 20 !important;
+}
+
+/* ── HIDE unused elements ── */
+.VPNavBarSocialLinks,
 .VPNavBarAppearance,
 .VPNavScreenMenu,
-.VPNavScreenTranslations, /* Remove redundant mobile language selector */
+.VPNavScreenTranslations,
 .extra,
 .social-links,
 .appearance {
@@ -158,23 +202,51 @@
   padding: 0 !important;
 }
 
-
-/* Nav Link Styling */
+/* ── Nav link styling ── */
 .VPNavBarMenuLink {
   font-weight: 500 !important;
   color: #1a1a1a !important;
-  padding: 0 15px !important;
+  padding: 0 12px !important;
   font-size: 0.95rem !important;
   border-bottom: none !important;
+  white-space: nowrap !important;
 }
-
 .VPNavBarMenuLink:hover {
   color: var(--vp-c-brand-1) !important;
 }
 
-/* =========================================
+/* ── CRITICAL: Override VitePress's own media queries ──
+   VitePress hides .VPNavBarMenu when sidebar is present at >=960px
+   (it moves items to sidebar navigation). We want to ALWAYS show
+   the top nav menu on screens above 768px. */
+
+/* Desktop: everything visible */
+@media (min-width: 769px) {
+  .VPNavBarMenu {
+    display: flex !important;
+  }
+  .VPNavBar .hamburger {
+    display: none !important;
+  }
+}
+
+/* Mobile/tablet: hide inline menu, show hamburger */
+@media (max-width: 768px) {
+  .VPNavBarMenu {
+    display: none !important;
+  }
+  .VPNavBar .hamburger {
+    display: flex !important;
+  }
+  .VPNavBar .container,
+  .VPNavBar.has-sidebar .container {
+    padding: 0 16px !important;
+  }
+}
+
+/* =============================================
    OVERVIEW PAGE — CUSTOM FEATURE GRID
-   ========================================= */
+   ============================================= */
 .custom-features-wrapper {
   margin-top: 3rem;
   padding-top: 2rem;
