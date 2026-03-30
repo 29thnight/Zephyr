@@ -1,24 +1,63 @@
-# Types & Value Model
+# Type Model
 
-Zephyr provides a flexible dynamic runtime while applying strict structural and value validation rules to safely bridge engine-driven C++ bounds.
+Zephyr integrates a dynamically robust type system wrapped underneath strict compile-time type verification passes.
 
-## Primitives
-Atomic unit values within bytecode registers.
+## Primitive Types
 
-- `int`: 64-bit Signed Integer.
-- `float`: Double-precision float.
-- `bool`: `true` / `false` logic value.
-- `string`: Garbage Collected (GC) string buffers.
-- `nil`: Empty or failed value.
-- `any`: Polymorphic box letting type evasion.
+There are four essential primitives stored directly by the register layout:
+- `int` (Represented by 64-bit signed integers)
+- `float` (Represented by 64-bit floating point precision IEEE 754)
+- `bool` (`true` or `false`)
+- `string` (Immutable UTF-8 byte arrays)
 
-## Complex Types
-Objects allocated into memory and fully managed by Zephyr's 4-Phase Generational Garbage Collector.
+```zephyr
+let hp: int = 100;
+let speed: float = 1.5;
+let is_alive: bool = true;
+let name: string = "Hero";
+```
 
-- **Array**
-- **Struct / Enum Instance**
-- **Function / Closure**
-- **Coroutine Object** (Yieldable Heap-based state machine)
+## String Interpolation
 
-> [!NOTE] Runtime Type Checks
-> To avoid fatal memory errors or pointer crashes originating from C++, the VM fiercely catches missing payloads, signature mismatches (`-> int`), and type errors instantly, then yields a catchable `RuntimeResult` internally.
+Zephyr offers embedded string formatting (Template Literals) denoted by an `f` prefix.
+
+```zephyr
+let entity = " Goblin";
+print(f"I found a{entity} with {hp} hitpoints.");
+```
+
+## Collection Traits
+
+### Arrays
+
+Arrays are inherently mutable resizable lists housing homogeneous values. To iterate them sequentially, use explicit `[index]` bracket notation or `for ... in` loop structures.
+
+```zephyr
+mut my_array = [10, 20, 30];
+my_array[0] = 50;
+
+print(my_array[0]); // 50
+print(my_array.length()); // 3
+```
+
+### Result Type (`Result<T>`)
+
+Since Zephyr removes traditional implicit `try / catch` flows commonly known for poor game scaling, all potentially fatal fallible logic throws an explicit built-in standard `Result<T>` Enum type.
+
+```zephyr
+enum Result<T> {
+    Ok(T),
+    Err(string),
+}
+```
+
+This enforces explicit manual verification and encourages matching to securely parse state returns.
+
+```zephyr
+fn get_file(path: string) -> Result<string> {
+    if exists(path) {
+        return Ok("content");
+    }
+    return Err("File not found");
+}
+```

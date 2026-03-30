@@ -1,30 +1,68 @@
 # Coroutines
 
-The core asynchronous state-machine solution in game logic mapping, letting numerous AI entities await or pause ticks without overheads.
+Zephyr features first-class `coroutine` capabilities. Native scripts can instantly pause execution mid-flight utilizing `yield` breakpoints preserving their internal stack frames into lightweight compacted Heap data buffers. This replaces threading bottlenecks generally tied to timeline events like Animation Sequencing or robust AI State Machine maneuvers natively.
 
-## `coroutine fn` / `yield` / `resume`
+## Instantiating and Executing
 
-Preserved independently on the Garbage Collector's dynamic heap rather than relying on C++ native call stacks (`State Machines`), ensuring completely jitter-free control inversion flows.
+Declare your routine boundaries prefaced utilizing the `coroutine fn` keyword.
+When querying a coroutine internally, understand that execution halts precisely prior to parsing the first instruction sequence, resuming entirely manually via subsequent `resume` triggers jumping towards underlying `yield` checkpoints.
 
 ```zephyr
-// Initializing State Machines utilizing coroutine hooks
-coroutine fn worker(limit: int) -> int {
-  let mut i: int = 0;
-  while i < limit {
-    yield i;      // Reverts execution thread immediately back to the caller
-    i = i + 1;
-  }
-  return i;       // Concludes the pipe (marked as Done)
+coroutine fn hello() -> void {
+    print("A");
+    yield;
+    print("B");
 }
 
-fn run() -> int {
-  // worker(n) halts execution upfront, yielding a Coroutine Object token
-  let c = worker(3);
-  
-  let a = resume c;  // steps onto the 1st yield -> 0
-  let b = resume c;  // steps onto the 2nd yield -> 1
-  
-  return a + b;      // Evaluates to 1
+let h = hello();
+resume h;   // Evaluates "A" and suspends.
+resume h;   // Evaluates "B" and concludes execution logic.
+print(h.done); // returns true.
+```
+
+## Reviewing Iteration Status
+
+Coroutine properties (CoroutineFrame instances) contain intuitive properties verifying loop termination checks seamlessly native to execution runtimes:
+- `.done` : A bool evaluating `true` the moment internal functions `return` fully closing the routine payload.
+- `.suspended` : A bool evaluating `true` implying processing sequences currently reside actively nested on an intermediate `yield` block.
+
+## Yielding Values Bidirectionally
+
+Return values across paused timelines safely transmitting payloads utilizing `yield <expr>`.
+
+```zephyr
+coroutine fn squares(n: int) -> int {
+    mut i = 1;
+    while i <= n {
+        yield i * i;
+        i += 1;
+    }
+}
+
+let sq = squares(4);
+while !sq.done {
+    print(resume sq); // 1, 4, 9, 16 
 }
 ```
-Further expansions on the observer pattern properties (`c.done`, `c.suspended`) are heavily requested and expected to land shortly.
+
+## Nested Helper Sub-Layer Yields
+
+Suspend entire branching logic sequentially across standard child helper method invokes nested internally. Any internal component calling a generic `yield` automatically freezes their corresponding parent coroutine hierarchy entirely.
+
+```zephyr
+fn wait_and_log(msg: string) -> void {
+    print(msg);
+    yield;   // Cascades freeze operations backwards cleanly!
+}
+
+coroutine fn sequence() -> void {
+    wait_and_log("step 1");
+    wait_and_log("step 2");
+}
+```
+
+## Implementation Architecture
+
+Zephyr sheds bloated traditional OS Thread Context Switches by swapping pointer structures utilizing `CoroutineFrame` variants residing safely across GC boundaries alongside native VM Registers mapping their underlying logic execution.
+
+The Native Environment Engine securely parses C++ host loop routines ticking `VM.resume()` mapping 60hz intervals dynamically avoiding overhead delays entirely!

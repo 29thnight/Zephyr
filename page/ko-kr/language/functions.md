@@ -1,23 +1,84 @@
 # Functions & Closures
 
-코드 조각을 패키징하는 단위입니다. C++ 호스트 바인딩을 통해 내부 로직에서 콜백(Callback)이나 핸들러(Handler)의 수단으로 손쉽게 활용할 수 있습니다.
+함수는 로직을 캡슐화하는 핵심 단위입니다. Zephyr에서 함수는 **일급 객체(First-class citizens)**로 취급되므로, 변수에 할당하거나 다른 함수의 인자로 전달할 수 있습니다.
 
 ## 함수 선언 (`fn`)
-명시적으로 입력과 출력부의 시그니처 힌팅을 지정합니다.
+
+함수는 `fn` 키워드로 시작하며, 반드시 파라미터의 타입과 반환 타입을 명시해야 합니다. 값을 반환하지 않는 함수는 리턴 타입을 `void`로 지정합니다.
 
 ```zephyr
-fn calculate_damage(attack: int, defense: int) -> int {
-  return attack - defense;
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn log(msg: string) -> void {
+    print(msg);
 }
 ```
 
-## 익명 함수 (Lambda / Closure)
-한 번만 실행하고 버리거나 이벤트 핸들러 주입 등을 처리할 목적으로 변수에 할당하여 자유롭게 활용할 수 있는 클로저 패턴입니다.
+> [!NOTE] 
+> 기본값 파라미터(Default arguments)나 선택적 포지셔널 인자 기능은 지원하지 않습니다. 모든 파라미터는 호출 시점에 제공되어야 하며, 만약 선택적인 데이터가 필요하다면 `Result<T>` 혹은 `any`를 활용하세요.
+
+## 일급 객체와 익명 함수
+
+함수 자체를 변수에 저장하거나 콜백(Callback) 인자로 넘길 수 있습니다.
 
 ```zephyr
-let increment = fn(a: int) -> int {
-    return a + 1;
-};
+fn double(x: int) -> int { return x * 2; }
 
-// ... 호스트 C++ 엔진으로 `increment` 전달
+// 변수에 저장하여 호출
+let f = double;
+print(f(5)); // 10
+
+// 고차 함수(Higher-order function)
+fn apply(func: fn(int) -> int, x: int) -> int {
+    return func(x);
+}
+```
+
+간단한 콜백은 익명 함수 구문을 사용해 인라인으로 작성할 수 있습니다.
+```zephyr
+let square = fn(x: int) -> int { return x * x; };
+```
+
+## 연관 함수 (Associated Functions)
+
+구조체(Struct)에 종속된 스태틱 메서드 또는 생성자는 `impl` 블록 내부에서 선언하며, `TypeName::fn_name()` 형태로 호출합니다.
+
+```zephyr
+impl Vec2 {
+    fn zero() -> Vec2 {
+        return Vec2 { x: 0.0, y: 0.0 };
+    }
+}
+
+let origin = Vec2::zero();
+```
+
+## 클로저 (Closure)
+
+클로저는 자신을 둘러싼 외부 스코프(Enclosing scope)의 변수를 캡처(Capture)할 수 있는 익명 함수입니다.
+
+```zephyr
+fn make_adder(n: int) -> fn(int) -> int {
+    return fn(x: int) -> int {
+        return x + n;   // 스코프 밖의 'n'을 캡처
+    };
+}
+```
+
+Zephyr는 이러한 외부 변수들을 GC가 관리하는 **Upvalue Cell**로 승격(Promotion)시킵니다. 따라서 클로저가 본래의 스코프를 벗어나 생존하더라도, 캡처된 상태를 온전히 유지하고 модип(Mutation)할 수 있습니다.
+
+```zephyr
+fn make_counter() -> fn() -> int {
+    mut count = 0;
+    return fn() -> int {
+        count += 1;
+        return count;
+    };
+}
+
+let counter = make_counter();
+print(counter()); // 1
+print(counter()); // 2
 ```

@@ -1,41 +1,43 @@
-# Overview
+# Zephyr Scripting Language
 
-Zephyr is a high-performance embedded scripting language for game engines, heavily inspired by Rust's syntax design.
+Zephyr is a fast, lightweight, and thoroughly modern script language meticulously designed from the ground up to be embedded directly into C++ applications—primarily video game engines.
 
-## Core Features
-- **Supported Paradigms**: Functions, Structs, Enums, Traits/Impls, Pattern Matching (`match`), Coroutines, Module Import/Export.
-- **Control Flow**: Fully supports `if let`, `while let`, and range-based iterators `for i in 0..n` or `for i in 0..=n`.
-- **Runtime Architecture**: Bytecode-first VM driven by Virtual Registers and Superinstructions.
-- **Garbage Collection**: 4-Space generational GC with card tracking (write barriers) to strictly prevent frame spikes.
-- **Coroutines**: Operates on an independent heap-reserved memory frame (`CoroutineObject`), decoupling completely from the C++ native call stack.
-
-## Unsupported Features
-Features currently excluded or unscheduled due to the strict embedding architecture:
-- Generics (Type parameters) and `where` clauses.
-- Macro systems.
-- Rust-level Ownership/Lifetime validation (handled natively by the GC instead).
-- Cross-boundary `async/await` with C++ (internally decoupled Coroutines handle logic suspensions).
-
-<br>
+Its core philosophy revolves around mitigating the pain points of general-purpose scripting languages when bound to high-performance C++ environments. Zephyr achieves this by adopting a **Zero-Cost C++ Object Reflection** and **Heap Frame Suspensions** approach.
 
 <div class="custom-features-wrapper">
   <h2>Zephyr Core Architecture</h2>
   <div class="custom-features-grid">
     <div class="custom-feature-card">
-      <h3>⚡ Cache-Friendly VM</h3>
-      <p>Superinstruction fusion and virtual register allocation for ultra-low latency runtime execution.</p>
+      <h3>⚡ Blazing Fast VM</h3>
+      <p>A highly specialized Register-Based Virtual Machine. Skips AST-walking and interprets optimized bytecode directly, reducing memory cache misses.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>♻️ Generational GC</h3>
-      <p>4-Space heap with card tracking ensures 0-hitch frame pacing for heavy gameplay logic.</p>
+      <h3>♻️ Advanced GC for Games</h3>
+      <p>Runs incrementally without massive Stop-The-World spikes. Features a 4-tier Generational layout with nursery and card table algorithms.</p>
     </div>
     <div class="custom-feature-card">
       <h3>🎮 First-class Coroutines</h3>
-      <p>Seamless yield/resume flow via heap-preserved state machines, independent of the host stack.</p>
+      <p>Write asynchronous logic sequentially using `coroutine fn` and `yield`. The state leverages heap allocation, bypassing native OS thread overhead entirely.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>🛡️ Strict Host Binding</h3>
-      <p>Powerful 4-phase handle lifecycle to protect C++ native memory from leaks or dangling pointers.</p>
+      <h3>🛡️ Safe Host Checking</h3>
+      <p>Employs a 4-step generational `Handle` pipeline (Frame, Tick, Persistent, Stable) to immediately sandbox invalidated native objects.</p>
     </div>
   </div>
 </div>
+
+## Language Architecture
+
+Instead of compiling purely ahead-of-time (AOT), Zephyr provides a Just-In-Time compiled (JIT) bytecode pipeline to favor hot-restorable iteration.
+
+1. **Parser & Lexer**: Scans the incoming `.zph` source code into an Abstract Syntax Tree (AST).
+2. **Sema (Semantic Analysis)**: Analyzes typings and tracks variable scoping, throwing exceptions upon identifying shadowed or undefined constraints.
+3. **Compiler**: Compiles the AST down to highly compact register-based opcodes, packaging it alongside a static metadata table (Constants Pool).
+4. **VM Runtime**: Executes bytecode at native speeds. Through C++ function pointers (Delegates), native bindings are accessed seamlessly.
+
+```zephyr
+// Example: Basic function and Rust-style return mechanics
+fn calculate_damage(base: float, multiplier: float) -> float {
+    return base * multiplier;
+}
+```

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
+  base: '/Zephyr/',
   title: "Zephyr",
   description: "A fast, lightweight script language for game engine embedding",
   appearance: false,
@@ -55,6 +56,15 @@ export default defineConfig({
               { text: 'Host Handle Policy', link: '/en-us/advanced/host-handles' },
               { text: 'Garbage Collection', link: '/en-us/advanced/garbage-collection' }
             ]
+          },
+          {
+            text: 'STANDARD LIBRARY',
+            items: [
+              { text: 'Math & String', link: '/en-us/standard-library/math-string' },
+              { text: 'Collections', link: '/en-us/standard-library/collections' },
+              { text: 'JSON & I/O', link: '/en-us/standard-library/json-io' },
+              { text: 'GC & Profiler', link: '/en-us/standard-library/gc-profiler' }
+            ]
           }
         ]
       }
@@ -98,6 +108,15 @@ export default defineConfig({
               { text: 'C++ 클래스 바인딩', link: '/ko-kr/advanced/bindings' },
               { text: '호스트 핸들 정책', link: '/ko-kr/advanced/host-handles' },
               { text: '가비지 컬렉터', link: '/ko-kr/advanced/garbage-collection' }
+            ]
+          },
+          {
+            text: '표준 라이브러리 (STANDARD LIBRARY)',
+            items: [
+              { text: '수학 및 문자열 (Math & String)', link: '/ko-kr/standard-library/math-string' },
+              { text: '컬렉션 (Collections)', link: '/ko-kr/standard-library/collections' },
+              { text: 'JSON 및 I/O (JSON & I/O)', link: '/ko-kr/standard-library/json-io' },
+              { text: '트러블슈팅 (GC & Profiler)', link: '/ko-kr/standard-library/gc-profiler' }
             ]
           }
         ]

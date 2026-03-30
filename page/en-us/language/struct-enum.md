@@ -1,28 +1,68 @@
-# Struct & Enum
+# Structs & Enums
 
-We strictly support Algebraic Data Types (Enums) and Structural records (Structs) to guarantee secure layout behaviors across the C++ bridge.
+The bulk of state logic and data grouping in Zephyr leverages composite data structures closely mirroring Rust's syntax.
 
-## Struct 
-Organizes and groups native attributes. It also supports field-shorthand initialization.
+## Struct Definitions
+
+A `struct` holds a cluster of grouped metadata fields under a single structural type tree.
 
 ```zephyr
 struct Player {
-  hp: int,
-  name: string,
+    name: string,
+    hp: int,
+    is_admin: bool,
 }
 
-let x = 3;
-let y = 4;
-let p1 = Player { hp: 10, name: "neo" };
-let p2 = Vec2 { x, y }; // field shorthand integration
+// Construction layout
+let mut p = Player {
+    name: "Zephyr",
+    hp: 100,
+    is_admin: true,
+};
+
+// Access mutation
+p.hp -= 10;
+print(p.name);
 ```
 
-## Enum
-Enums act as robust branches utilizing runtime payloads, not just plain constants. They serve as the predominant layout for reliable state mechanics.
+## Enum Expressions
+
+Enums manifest distinct variant payloads. Unlike typical C integers, Zephyr enums are Algebraic Data Types (ADT) holding customized underlying tuples of multiple embedded structs.
 
 ```zephyr
-enum State {
-  Idle,
-  Hurt(int), // int payload containing taken damage amount
+enum Event {
+    Quit,
+    Move(x: float, y: float),
+    Say(message: string),
 }
+
+let evt = Event::Move(10.5, 20.0);
+```
+
+## Implementation Blocks (`impl`)
+
+Unlike heavy prototype chaining, methods and static associations are appended strictly outwards referencing the struct's specific `impl` scope.
+
+The first parameter of a bound method must always be `self`.
+
+```zephyr
+struct Vec2 {
+    x: float,
+    y: float,
+}
+
+impl Vec2 {
+    // Static association (no 'self')
+    fn new(x: float, y: float) -> Vec2 {
+        return Vec2 { x: x, y: y };
+    }
+
+    // Method association 
+    fn magnitude(self) -> float {
+        return sqrt(self.x * self.x + self.y * self.y);
+    }
+}
+
+let v = Vec2::new(3.0, 4.0);
+print(v.magnitude()); // 5.0
 ```

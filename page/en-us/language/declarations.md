@@ -1,28 +1,52 @@
-# Declarations
+# Declarations & Scope
 
-How to declare the building blocks (Variables, Functions) of Zephyr.
+In Zephyr, all variables must be explicitly bound and initialized before they are parsed by the AST.
 
-## Variables (`let` / `mut`)
+## Let & Mut
 
-By default, variables are allocated immutably. You may optionally append type hints.
+- `let` declares an immutable binding. The memory slot prevents reassignment after the initial allocation.
+- `mut` permits continuous modifications inside the current scope frame.
+
 ```zephyr
-let score = 10;
-let hp: int = 100;
+let max_health = 100;
+// max_health = 200; // Throws a compile-time Error
+
+mut current_health = 50;
+current_health += 10; // Evaluates successfully
 ```
 
-To modify its value later alongside the VM iteration, append the `mut` keyword.
-```zephyr
-let mut offset = 0;
-offset += 5;
-```
+## Shadowing
 
-## Functions (`fn`)
+You can reuse the identical variable names. When redefining a bounded target downstream in an inner block scope, it **shadows** the top-level declaration without mutating the original primitive context.
 
-A fundamental logic encapsulation signature.
 ```zephyr
-fn calculate(attack: int, defense: int) -> int {
-  return attack - defense;
+let x = 10;
+{
+    let x = 20; // Shallow block shadowing
+    print(x);   // 20
 }
+print(x);       // 10
 ```
 
-For specialized types such as Enums, Structs, Closures, or Coroutines, please review deep dive contents mapped on the left sidebar.
+## Explicit Type Annotations
+
+The Compiler includes a bidirectional Type Inference Engine under the hood, so explicit type mappings are seldom necessary unless manually resolving ambiguity.
+
+```zephyr
+// Derived as 'int' implicitly
+let x = 42; 
+
+// Explicitly marked
+let y: float = 42.0; 
+```
+
+### Casting (Type Coercion)
+
+You can forcibly cast primitive derivations using the `as` structural keyword.
+
+```zephyr
+let value = 15;
+let forced_ratio = value as float; // Coerces into 15.0
+
+print(forced_ratio / 2.0); // 7.5
+```

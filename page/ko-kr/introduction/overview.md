@@ -1,41 +1,32 @@
 # Overview
 
-Zephyr는 Rust 스타일 문법을 참고한 게임 엔진용 고성능 임베디드 스크립트 언어입니다.
+Zephyr는 Rust 스타일 문법을 채택하고 차용 검사(Borrow checking)나 수명(Lifetime) 어노테이션의 복잡성을 제거한, 게임 엔진용 고성능 임베디드 스크립트 언어입니다.
 
 ## 핵심 특징
 
-- **지원 기능**: 함수, 구조체, 열거형, trait/impl, match 패턴 매칭, 코루틴, 모듈 import/export
-- **흐름 제어**: `if let`, `while let`, 범위 기반 `for i in 0..n`, `for i in 0..=n` 완벽 지원
-- **오류 전파**: 가상머신 내부는 Result 계열 흐름으로 제한된 예외 처리를 수행합니다.
-- **런타임 아키텍처**: 바이트코드(Bytecode) 파이프라이닝 우선의 가상 머신(Register 기반).
-- **게임 특화 시스템**: 호스트 C++와 완전히 격리되어 엔진 틱(Tick) 단위로 쉽게 제어 가능한 전용 코루틴을 제공합니다.
-
-## 미지원 항목 (Unsupported)
-현재 아키텍처 구조상 미지원 상태이거나 지원 예정이 없는 기능입니다.
-
-- 제네릭(Type Parameter) 및 `where` 절
-- 매크로(Macro) 시스템
-- Rust 수준의 소유권(Ownership) 및 라이프타임 시스템 (명시적인 GC 시스템이 대신 관리)
-- 네이티브 C++ 경계를 넘나드는 `async/await` (내장 코루틴만 사용)
+- **풍부한 언어 기능**: 함수(`fn`), 구조체(`struct`), 열거형(`enum`), 트레이트(`trait`) 및 구현(`impl`), 패턴 매칭(`match`), 제네릭(`<T>`) 및 `where` 절, 모듈 `import`/`export` 완벽 지원.
+- **고급 제어 흐름 및 연산자**: `if/else`, `while`, `for in`, `break`, `continue`, `yield` 등을 지원하며, `Result<T>` 기반의 오류 전파(`?` 연산자) 및 옵셔널 체이닝(`?.`)을 제공합니다.
+- **런타임 아키텍처**: 슈퍼인스트럭션 융합(Superinstruction fusion)이 적용된 레지스터 기반(Register-based)의 고성능 바이트코드 가상 머신(VM). 릴리스 빌드에서는 AST를 건너뛰고 바이트코드만 사용하여 실행됩니다.
+- **안전한 호스트 연동**: 명시적인 C++ 런타임 호스트 바인딩 및 4단계 생명주기(`Frame`, `Tick`, `Persistent`, `Stable`)를 갖춘 핸들 시스템.
 
 <div class="custom-features-wrapper">
   <h2>Zephyr Core Architecture</h2>
   <div class="custom-features-grid">
     <div class="custom-feature-card">
-      <h3>⚡ 캐시 친화적 가상머신 (VM)</h3>
-      <p>가상 레지스터 할당 및 슈퍼인스트럭션 융합(Fusion) 기술을 통해 초저지연 실행 속도를 제공합니다.</p>
+      <h3>⚡ 초고속 가상머신 (VM)</h3>
+      <p>가상 레지스터 할당, Copy propagation, 슈퍼인스트럭션 융합(Fusion) 등의 최적화 기술이 적용된 바이트코드 인터프리터입니다.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>♻️ 세대별 가비지 컬렉터</h3>
-      <p>카드 트래킹이 적용된 4-Space 힙(Heap) 구조가 무거운 게임 로직에서도 프레임 드랍 없는 일관된 속도를 보장합니다.</p>
+      <h3>♻️ 세대별 가비지 컬렉터 (Generational GC)</h3>
+      <p>Nursery(Young) 구조와 Old Generation 기반의 증분형(Incremental) GC입니다. 카드 테이블 및 Write barrier를 활용해 게임 루프 내 퍼즈(Pause) 시간을 최소화합니다.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>🎮 일급 객체 코루틴</h3>
-      <p>호스트(C++) 콜스택과 완벽하게 완전히 분리된 독립 힙 기반 상태 머신으로 구현된 즉각적인 제어 역전(Yield/Resume)을 지원합니다.</p>
+      <h3>🎮 일급 객체 코루틴 (Coroutines)</h3>
+      <p>호스트(C++) 콜스택과 무관하게 힙(Heap)에 상주하는 독립된 프레임을 가지며, `yield`와 `resume`를 통한 유연하고 즉각적인 제어 흐름 전환을 지원합니다.</p>
     </div>
     <div class="custom-feature-card">
       <h3>🛡️ 강력한 호스트 바인딩 정책</h3>
-      <p>메모리 누수와 댕글링 포인터로부터 C++ 네이티브 메모리를 완벽하게 수호하는 4단계 핸들 수명 주기 시스템.</p>
+      <p>직렬화 규격(ZephyrSaveEnvelope)과 세대별 안전 검증 체계를 통해 댕글링 참조를 방지하고 엔진 객체 생명주기를 완벽히 분리합니다.</p>
     </div>
   </div>
 </div>

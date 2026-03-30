@@ -1,32 +1,66 @@
-# Coroutines (코루틴 상태 머신)
+# Coroutines
 
-게임 개발에서 수많은 AI 엔티티나 로직의 프레임 진행 딜레이(Wait), 조건형 이벤트 트리거를 제로-오버헤드에 가깝게 만들기 위한 코어 시스템입니다.
+Zephyr의 코루틴은 특정 시점(`yield`)에 실행을 일시 중단하고 보존된 힙(Heap) 상태를 유지한 채 호스트로 제어권을 반환할 수 있는 일급 객체입니다. 게임 AI 상태 머신, 애니메이션 시퀀싱 전개, 비동기적인 타임라인 제어에 매우 효과적입니다.
 
-## `coroutine` 및 `yield`, `resume` 사용
+## 코루틴 생성 및 실행
 
-콜스택(Call Stack) 보존이라는 제약 없이 엔진 가비지 컬렉터의 Heap 영역에 로컬 환경 변수들이 유지되며 프레임 드랍 없는 빠른 제어 역전(Yield/Resume)을 수행합니다.
+일반적인 `fn` 대신 `coroutine fn` 키워드를 사용하여 선언합니다. 코루틴 함수를 호출하더라도 코드가 즉시 실행되지는 않으며, `resume` 키워드로 깨워주어야만 첫 `yield` 구문(또는 함수 종료 지점) 까지 진행됩니다.
 
 ```zephyr
-// yield를 포함하는 상태 머신 생성 함수 선언
-coroutine fn worker(limit: int) -> int {
-  let mut i: int = 0;
-  while i < limit {
-    yield i;      // 호출자나 엔진으로 제어권을 넘기며 i를 리듀스(Suspend)
-    i = i + 1;
-  }
-  return i;       // 파이프라인의 최종 종료(Done)
+coroutine fn hello() -> void {
+    print("A");
+    yield;
+    print("B");
 }
 
-fn run() -> int {
-  // `worker(n)` 호출 시 즉시 실행되지 않고, Coroutine Object 프레임 리터럴 반환
-  let c = worker(3);
-  
-  let a = resume c;  // 첫 번째 yield 단계 진행 -> 0
-  let b = resume c;  // 두 번째 yield 단계 진행 -> 1
-  
-  return a + b;      // 결과 -> 1
+let h = hello();
+resume h;   // "A" 출력 후 중단
+resume h;   // "B" 출력 후 종료
+print(h.done); // true
+```
+
+## 코루틴 상태 조회
+
+모든 코루틴 인스턴스(CoroutineFrame)는 내장 속성을 제공합니다.
+- `.done` : 함수가 완전히 반환(`return`)되어 종료되었는지 확인하는 bool 값입니다.
+- `.suspended` : 현재 코루틴이 진행 중이 아니라 `yield` 상태로 대기 중인지 확인하는 bool 값입니다.
+
+## 양방향 값 전달
+
+`yield <expr>` 을 통해 호출자(resume하는 쪽)에게 값을 즉각 반환할 수 있습니다.
+
+```zephyr
+coroutine fn squares(n: int) -> int {
+    mut i = 1;
+    while i <= n {
+        yield i * i;
+        i += 1;
+    }
+}
+
+let sq = squares(4);
+while !sq.done {
+    print(resume sq); // 1, 4, 9, 16 출력
 }
 ```
 
-## 활용 정책 및 주의점
-향후 `c.done`, `c.suspended` 같은 내장 메서드의 확장을 통해, C++ 호스트 틱(Tick) 단위에서 관리 중인 모든 스크립트 객체들의 진행 여부를 유연하게 파악할 수 있도록 진화하고 있습니다.
+## 중첩 및 헬퍼 계층
+
+코루틴 내에서 호출된 일반 함수 내부에서 `yield`를 호출할 수 있으며, 이 경우 부모 코루틴을 포함한 전체 호출 스택이 동시에 안전하게 중단(Suspend)됩니다.
+
+```zephyr
+fn wait_and_log(msg: string) -> void {
+    print(msg);
+    yield;   // 부모 코루틴의 흐름을 통째로 중단시킵니다.
+}
+
+coroutine fn sequence() -> void {
+    wait_and_log("step 1");
+    wait_and_log("step 2");
+}
+```
+
+## 구현 구조 (Architecture)
+
+OS 쓰레드 방식과 달리 콜스택의 포인터를 보존하기 위한 불필요한 메모리 낭비가 전혀 없습니다.
+모든 코루틴은 독립적인 레지스터 뱅크 스냅샷과 PC(Program Counter)를 담는 가벼운 `CoroutineFrame`으로 힙 영역에 거주하며, 호스트 엔진(C++) 코드는 메인루프 틱(Tick)마다 단순히 `VM.resume()`을 호출하는 것으로 코루틴을 재가동합니다.

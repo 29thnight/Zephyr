@@ -1,32 +1,58 @@
-# Pattern Matching (`match`)
+# Pattern Matching
 
-A transparent and incredibly safe system capable of destructuring inner fields, dissecting arrays, and comparing explicit boundary payloads without triggering null pointer crashes.
+The `match` expression provides a secure and powerful way to destructively extract Enum properties through robust path branching and exhaustiveness checks.
 
-## Examples
-By compounding wildcards (`_`), `OR` bounds, struct destructuring, tuple slicing, and conditional `if guards`, runtime branching complexity diminishes substantially.
+## Exhaustiveness Verification
+
+Whenever an enum branch evaluates a `match` case, all enclosed underlying variants **must** be mapped appropriately. If trailing paths are neglected, it issues a fatal AST semantic compilation error.
 
 ```zephyr
-// Enum & Struct Extraction + Guard
+enum Status { Alive, Dead, Unknown }
+
+let s = Status::Alive;
+match s {
+    Alive => print("Still kicking"),
+    Dead  => print("Game Over"),
+    // If Unknown is missing here, the compiler will trigger an error.
+    Unknown => print("???"),
+}
+```
+
+To easily bypass exhaustive maps efficiently across vast enumerations, install a fallback catch-all variable or placeholder (`_`).
+
+```zephyr
+match s {
+    Alive => print("Still kicking"),
+    _     => print("Passed out"), // Handles (Dead, Unknown)
+}
+```
+
+## Extracting Tuple Variants
+
+The true power of `match` manifests when unrolling the contents tightly baked within an Algebraic Data Enum type.
+
+```zephyr
+enum Message {
+    Quit,
+    Chat(player: string, content: string),
+}
+
+let event = Message::Chat("Hero", "Hello!");
+
 match event {
-  Event::Hit(Hit { damage, crit: true }) if damage > 5 => damage,
-  Event::None | Event::Hit(_) => 0,
+    Quit => exit(),
+    Chat(p, c) => print(f"[{p}] said: {c}"), 
 }
+```
 
-// Range evaluation mapping
-match value {
-  0..10 => "low",
-  10..=20 => "mid",
-  _ => "high",
-}
+In scenarios that require partial destructing validation (e.g. tracking when a variable surpasses a threshold limit), utilize Pattern **Guards** via conditional checking appended at the suffix of an extraction map.
 
-// Tuple bindings
-match point {
-  (x, y) => x + y,
-}
-
-// Array boundary matching
-match pair {
-  [lhs, rhs] => lhs + rhs,
-  _ => 0,
+```zephyr
+match event {
+    Chat(p, c) if p == "Admin" => {
+        print("Admin invoked command.");
+    },
+    Chat(p, c) => print(c),
+    _ => (),
 }
 ```

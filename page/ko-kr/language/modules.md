@@ -1,25 +1,80 @@
-# Modules & Imports
+# Modules & Packages
 
-길어지는 로직과 소스들을 역할 단위 객체로 패키징할 수 있습니다.
+Zephyr 코드는 `.zph` 확장자를 가지는 모듈(Module) 단위로 논리적으로 분리되며, 명시적인 `import`/`export` 구문을 사용해 인터페이스를 개방합니다.
 
-## 스크립트 모듈 연동
-타 파일들이나 코어 엔진에서 심볼이나 함수를 가져옵니다.
+## 모듈 간 공유 (`import / export`)
+
+외부 모듈에서 불러와 사용하려면 선언부 앞에 `export` 키워드를 붙입니다.
 
 ```zephyr
-// 외부 파일의 Namespace를 한 번에 인클루드
-import "foo.zph";
-
-// Alias(별칭) 단위로 종속성 호출 축소
-import "foo.zph" as foo;
-
-// C++ 혹은 Zephyr 코어 시스템 단에 구축된 전역 내장 모듈
-import "engine";
-
-// 외부에서 이 모듈의 함수를 Call할 수 있도록 개방
-export fn run() -> int {
-  return 1;
-}
+// math_utils.zph
+export fn square(x: float) -> float { return x * x; }
+export let PI = 3.14159;
 ```
 
-> [!NOTE] 정적 분석 방어
-> 스크립트 컴파일 트리 파싱 단계에서 존재하지 않는 파일이나, `export` 처리가 되지 않은 비공개 멤버 함수를 호출하려 들면 엔진 시스템이 종속성 누락 오류를 친절하게 반환합니다.
+외부 모듈에서 이 항목들을 가져오는 방법(Import)은 세 가지가 있습니다:
+
+1. **기본 가져오기**: 수출(Export)된 모든 식별자를 전역 스코프에 병합합니다.
+```zephyr
+import "math_utils";
+print(PI);
+```
+
+2. **지정 가져오기 (Named import)**: 필요한 항목만 명시하여 가져옵니다.
+```zephyr
+import { square } from "math_utils";
+```
+
+3. **네임스페이스 지정식 가져오기**: 이름 충돌을 피하기 위해 접두사(`alias`)를 지정합니다.
+```zephyr
+import "math_utils" as math;
+print(math.PI);
+```
+
+> 모듈의 식별자들을 우회하여 다른 모듈로 다시 전달하는 재수출(Re-export, `export { func } from "other";`) 기능도 지원합니다.
+
+## 호스트 C++ 제공 모듈
+
+C++ 엔진 코드에서 동적으로 모듈을 주입할 수 있습니다. 바인딩된 모듈은 Zephyr 스크립트 상에서 동일하게 `import` 할 수 있습니다.
+
+```cpp
+vm.register_module("engine", [](ZephyrRuntime& rt) {
+    rt.set_function("spawn", spawn_entity);
+});
+```
+
+```zephyr
+import "engine";
+let e = spawn("player");
+```
+
+## 모듈 바이트코드 캐싱
+
+Zephyr 컴파일러는 `.zph` 모듈을 파싱한 후 동일한 디렉토리에 `.zphc` 형태의 바이트코드 캐시 파일을 생성합니다. 소스 파일의 mtime(수정 시간)을 비교해 변경사항이 없을 경우 구문 분석(AST 변환)과 타입을 재검증하지 않고 캐시된 바이트코드를 즉각 로딩하여 매우 빠른 구동 속도를 보장합니다.
+
+## Package 구성 (`package.toml`)
+
+다중 패키지 프로젝트를 구성할 때는 패키지 매니페스트(`package.toml`)가 사용됩니다.
+
+```toml
+[package]
+name = "my_game"
+version = "0.1.0"
+entry = "src/main.zph"
+
+[dependencies]
+math = "std/math"
+utils = "src/utils"
+```
+
+호스트에서 `ZephyrVM::set_package_root()`를 호출하면 매니페스트를 참고하여 최상위 진입점을 설정하게 됩니다.
+
+## 표준 라이브러리 (`std/*`)
+
+Zephyr는 게임 스크립팅에 필수적인 표준 라이브러리를 기본 제공합니다.
+- `std/math`: `sqrt`, `abs`, `lerp`, `clamp`, `sin`, `cos` (수치 연산)
+- `std/string`: `split`, `trim`, `replace`, `to_upper` (텍스트 가공)
+- `std/collections`: `Map<K,V>`, `Set<T>`, `Queue<T>`, `Stack<T>` (자료구조)
+- `std/json`: `parse(s: string) -> Result<any>`, `stringify(v: any) -> string`
+- `std/io`: `read_file`, `write_file`
+- `std/gc`, `std/profiler`: 프로세스 상태 수명 제어 및 벤치마킹 도구

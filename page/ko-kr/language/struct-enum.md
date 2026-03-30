@@ -1,28 +1,84 @@
-# Struct & Enum
+# Structs & Enums
 
-Rust 스타일의 구조체와 Algebraic Data Type 형 열거형을 적극 지원하여 스크립트 코드의 안정성을 확보합니다.
+프로그램에서 사용하는 복합적인 데이터 구조를 정의합니다.
 
-## 구조체 (`struct`)
-객체 지향 모델의 클래스 또는 데이터 버퍼를 그룹화하는 타입입니다. 초기화 구문에서 필드 단축 문법(Shorthand)을 제공합니다.
+## 구조체 (Struct)
+
+연관된 여러 값(`Fields`)을 그루핑하는 Product Type입니다. 구조체를 선언하고 인스턴스를 만들 때는 모든 필드를 명시해야 하며, 기본값 기능은 없습니다.
 
 ```zephyr
-struct Player {
-  hp: int,
-  name: string,
+struct Point {
+    x: float,
+    y: float,
 }
 
-let x = 3;
-let y = 4;
-let p1 = Player { hp: 10, name: "neo" };
-let p2 = Vec2 { x, y }; // 필드 단축 초기화
+let p = Point { x: 3.0, y: 4.0 };
+print(p.x);
 ```
 
-## 열거형 (`enum`)
-단순한 상수 나열이 아닌, 상태와 파라미터(Payload)를 동적으로 담아둘 수 있는 가장 강력한 흐름 분기 디자인 패턴 도구입니다.
+변수가 가변(`mut`)으로 선언되었다면 구조체의 필드도 점(`.`) 표기법을 통해 수정 가능합니다.
 
 ```zephyr
-enum State {
-  Idle,
-  Hurt(int), // 타격 데미지를 담고 있는 페이로드
+mut q = Point { x: 0.0, y: 0.0 };
+q.x = 10.0;
+```
+
+### 구조체 메서드 (`impl`)
+
+`impl` 블록을 사용해 구조체 전용 메서드를 구현할 수 있습니다. 인스턴스 메서드는 항상 첫 번째 파라미터로 명시적인 `self`를 받아야 합니다.
+
+```zephyr
+struct Rect {
+    width: float,
+    height: float,
+}
+
+impl Rect {
+    fn area(self) -> float {
+        return self.width * self.height;
+    }
+}
+
+let r = Rect { width: 4.0, height: 3.0 };
+print(r.area()); // 12
+```
+
+## 열거형 (Enum)
+
+값이 미리 지정한 고정된 배리언트(Variants) 집합 중 하나에 속하는 Sum Type입니다.
+
+```zephyr
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+let dir = Direction::North;
+```
+
+열거형의 배리언트는 별도의 내부 데이터를 지닐 수도 있습니다. (Payload)
+
+```zephyr
+enum Shape {
+    Circle(float),            // 반지름
+    Rect(float, float),       // 너비, 높이
+    Point,
+}
+
+let s = Shape::Circle(3.0);
+```
+
+이러한 형태의 열거형은 구조 분해(Destructuring) 및 분기 로직 처리를 위해 패턴 매칭(`match`) 문법과 강력한 시너지를 일으킵니다.
+
+### 내장 열거형: `Result<T>`
+
+성공 결과 도는 오류 메시지를 반환하는 `Result<T>` 타입 역시 제네릭과 열거형을 이용해 구현된 Zephyr 내장 에러 응답용 Enum 객체입니다.
+
+```zephyr
+enum Result<T> {
+    Ok(T),
+    Err(string),
 }
 ```
