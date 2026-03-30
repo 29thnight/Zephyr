@@ -11,6 +11,7 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
+    i18nRouting: true,
     // Social links removed as requested (Github icon removal)
     socialLinks: []
   },
@@ -19,7 +20,6 @@ export default defineConfig({
     'en-us': {
       label: 'English',
       lang: 'en-US',
-      link: '/Zephyr/en-us/',
       themeConfig: {
         nav: [
           { text: 'Documentation', link: '/en-us/introduction/overview' },
@@ -72,7 +72,6 @@ export default defineConfig({
     'ko-kr': {
       label: '한국어',
       lang: 'ko-KR',
-      link: '/Zephyr/ko-kr/',
       themeConfig: {
         nav: [
           { text: '문서', link: '/ko-kr/introduction/overview' },
