@@ -31,7 +31,7 @@ let z = "hello"; // Infer string
 let x: any = nil;
 ```
 
-## Result<T> and Error Propagation
+## Result\<T\> and Error Propagation
 
 `Result<T>` is a built-in enum used to handle operations that can fail.
 
