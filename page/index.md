@@ -1,13 +1,13 @@
 <script setup>
 import { onMounted } from 'vue'
+import { withBase } from 'vitepress'
 
 onMounted(() => {
-  // Default: en-us. Only redirect to ko-kr for Korean browsers.
   const lang = navigator.language?.toLowerCase() ?? ''
   if (lang.startsWith('ko')) {
-    window.location.replace('/ko-kr/')
+    window.location.replace(withBase('/ko-kr/'))
   } else {
-    window.location.replace('/en-us/')
+    window.location.replace(withBase('/en-us/'))
   }
 })
 </script>

@@ -15,8 +15,8 @@
 
       <!-- Phase 2+: Buttons morph in -->
       <div class="zs-actions" :class="phase >= 2 ? 'zs-morph-in-delayed' : 'zs-hidden'">
-        <a :href="primaryLink" class="zs-btn zs-btn-primary">{{ primaryText }}</a>
-        <a :href="secondaryLink" class="zs-btn zs-btn-ghost">{{ secondaryText }}</a>
+        <a :href="resolvedPrimaryLink" class="zs-btn zs-btn-primary">{{ primaryText }}</a>
+        <a :href="resolvedSecondaryLink" class="zs-btn zs-btn-ghost">{{ secondaryText }}</a>
       </div>
 
     </div>
@@ -25,6 +25,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { withBase } from 'vitepress';
 import BrandLogo from './BrandLogo.vue';
 
 const props = defineProps({
@@ -35,6 +36,14 @@ const props = defineProps({
   secondaryText:{ type: String, default: 'GitHub' },
   secondaryLink:{ type: String, default: '/' }
 });
+
+// Apply base path to internal links (external links pass through unchanged)
+const resolvedPrimaryLink = computed(() =>
+  props.primaryLink.startsWith('http') ? props.primaryLink : withBase(props.primaryLink)
+);
+const resolvedSecondaryLink = computed(() =>
+  props.secondaryLink.startsWith('http') ? props.secondaryLink : withBase(props.secondaryLink)
+);
 
 // ── Korean IME step generator ──────────────────────────────────
 const CHOSEONG = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
