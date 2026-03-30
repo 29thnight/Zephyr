@@ -1,25 +1,17 @@
-# Modules & Imports
+# Modules and Packages
 
-Splits prolonged logics into independent component packages.
+Zephyr organizes code into modules. Each `.zph` file is an independent module that can export its bindings for use by other modules.
 
-## Loading external symbols
-Fetching variables, interfaces, or classes residing outside the context.
+## Exporting
+
+Any top-level declaration (functions, variables, structs, enums, etc.) can be exported using the `export` keyword.
 
 ```zephyr
-// Imports entirety of the external namespace explicitly
-import "foo.zph";
-
-// Narrows down collision margins masking with an Alias
-import "foo.zph" as foo;
-
-// C++ Global builtin namespaces
-import "engine";
-
-// Opens the function accessibility towards other import nodes
-export fn run() -> int {
-  return 1;
+// math.zph
+export const PI = 3.14159;
+export fn square(x: float) -> float {
+    return x * x;
 }
 ```
 
-> [!NOTE] Dependency Static Defenses
 > If an imported member is completely unresolved or lacks the `export` keyword, Zephyr aggressively aborts its compilation node right away avoiding dangerous runtime evaluation.

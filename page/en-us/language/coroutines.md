@@ -1,30 +1,86 @@
 # Coroutines
 
-The core asynchronous state-machine solution in game logic mapping, letting numerous AI entities await or pause ticks without overheads.
+Coroutines are functions that can suspend their execution at a `yield` point and be resumed later from exactly where they left off. They are the primary mechanism for managing asynchronous state machines, AI logic, and sequential animations in Zephyr.
 
-## `coroutine fn` / `yield` / `resume`
+## Declaration and Creation
 
-Preserved independently on the Garbage Collector's dynamic heap rather than relying on C++ native call stacks (`State Machines`), ensuring completely jitter-free control inversion flows.
+A coroutine is declared using the `coroutine fn` keyword. Calling a coroutine function does not execute its body immediately; instead, it returns a coroutine object that represents the suspended state of the function.
 
 ```zephyr
-// Initializing State Machines utilizing coroutine hooks
-coroutine fn worker(limit: int) -> int {
-  let mut i: int = 0;
-  while i < limit {
-    yield i;      // Reverts execution thread immediately back to the caller
-    i = i + 1;
-  }
-  return i;       // Concludes the pipe (marked as Done)
+coroutine fn task() -> void {
+    print("Step 1");
+    yield;
+    print("Step 2");
 }
 
-fn run() -> int {
-  // worker(n) halts execution upfront, yielding a Coroutine Object token
-  let c = worker(3);
-  
-  let a = resume c;  // steps onto the 1st yield -> 0
-  let b = resume c;  // steps onto the 2nd yield -> 1
-  
-  return a + b;      // Evaluates to 1
+let c = task(); // Function is created but not yet executing
+```
+
+## Resumption and Suspension
+
+Execution begins or continues only when the `resume` operator is applied to the coroutine object.
+
+```zephyr
+resume c; // Prints "Step 1" and suspends at yield
+resume c; // Prints "Step 2" and returns
+```
+
+### Yielding Values
+
+The `yield` statement can optionally include an expression. This value is returned to the caller as the result of the `resume` operation.
+
+```zephyr
+coroutine fn counter(n: int) -> int {
+    let mut i = 0;
+    while i < n {
+        yield i;
+        i += 1;
+    }
+}
+
+let c = counter(3);
+print(resume c); // 0
+print(resume c); // 1
+print(resume c); // 2
+```
+
+## Coroutine Properties
+
+Coroutine objects expose two built-in properties to track their execution status:
+
+| Property | Type | Description |
+|---|---|---|
+| `.done` | `bool` | Returns `true` if the function has finished execution (returned). |
+| `.suspended` | `bool` | Returns `true` if the function is currently paused at a `yield` point. |
+
+```zephyr
+while !c.done {
+    resume c;
 }
 ```
-Further expansions on the observer pattern properties (`c.done`, `c.suspended`) are heavily requested and expected to land shortly.
+
+## Nested Calls and Yield Propagation
+
+Zephyr supports deep yielding. If a coroutine calls a regular function (`fn`), and that function (or any function further down the call stack) executes a `yield`, the entire call chain is suspended. The coroutine object maintains this deep call stack until resumed.
+
+```zephyr
+fn helper() -> void {
+    print("In helper");
+    yield;
+}
+
+coroutine fn main_task() -> void {
+    helper();
+    print("Back in main");
+}
+```
+
+## Implementation Details
+
+All coroutines are heap-resident. Each instance is backed by a `CoroutineFrame` containing:
+- A snapshot of all registers (0-255).
+- The current operand stack.
+- The instruction pointer (PC).
+- A pointer to the enclosing closure's upvalues.
+
+When a coroutine yields, the frame is optionally compacted to reduce memory overhead. When resumed, the VM restores the register bank and continues execution from the saved instruction pointer.

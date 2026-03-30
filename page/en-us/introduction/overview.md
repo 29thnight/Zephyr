@@ -3,39 +3,35 @@
 Zephyr is a high-performance embedded scripting language for game engines, heavily inspired by Rust's syntax design.
 
 ## Core Features
-- **Supported Paradigms**: Functions, Structs, Enums, Traits/Impls, Pattern Matching (`match`), Coroutines, Module Import/Export.
-- **Control Flow**: Fully supports `if let`, `while let`, and range-based iterators `for i in 0..n` or `for i in 0..=n`.
-- **Runtime Architecture**: Bytecode-first VM driven by Virtual Registers and Superinstructions.
-- **Garbage Collection**: 4-Space generational GC with card tracking (write barriers) to strictly prevent frame spikes.
-- **Coroutines**: Operates on an independent heap-reserved memory frame (`CoroutineObject`), decoupling completely from the C++ native call stack.
+- **Supported Paradigms**: Functions, Structs, Enums, Traits/Impls, Pattern Matching (`match`), Generics, Coroutines, Module Import/Export.
+- **Control Flow**: Supports `if let`, `while let`, and range-based iterators (`0..n`, `0..=n`).
+- **Runtime Architecture**: Register-based VM with superinstruction fusion.
+- **Garbage Collection**: 4-Space generational collector with card tracking and write barriers.
+- **Coroutines**: Independent heap-reserved memory frames (`CoroutineObject`), decoupled from the C++ native call stack.
 
-## Unsupported Features
-Features currently excluded or unscheduled due to the strict embedding architecture:
-- Generics (Type parameters) and `where` clauses.
-- Macro systems.
-- Rust-level Ownership/Lifetime validation (handled natively by the GC instead).
-- Cross-boundary `async/await` with C++ (internally decoupled Coroutines handle logic suspensions).
-
-<br>
+## Constraints
+- No macro system.
+- No Rust-level ownership/lifetime validation (memory managed via generational GC).
+- Cross-boundary `async/await` with C++ is handled via coroutine suspension.
 
 <div class="custom-features-wrapper">
-  <h2>Zephyr Core Architecture</h2>
+  <h2>Technical Specifications</h2>
   <div class="custom-features-grid">
     <div class="custom-feature-card">
-      <h3>⚡ Cache-Friendly VM</h3>
-      <p>Superinstruction fusion and virtual register allocation for ultra-low latency runtime execution.</p>
+      <h3>⚡ VM Execution</h3>
+      <p>Superinstruction fusion and virtual register allocation for optimized instruction dispatch.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>♻️ Generational GC</h3>
-      <p>4-Space heap with card tracking ensures 0-hitch frame pacing for heavy gameplay logic.</p>
+      <h3>♻️ Memory Management</h3>
+      <p>4-Space generational GC with write barriers to ensure deterministic frame timing.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>🎮 First-class Coroutines</h3>
-      <p>Seamless yield/resume flow via heap-preserved state machines, independent of the host stack.</p>
+      <h3>🎮 State Management</h3>
+      <p>Heap-preserved coroutine frames for complex asynchronous logic without stack overhead.</p>
     </div>
     <div class="custom-feature-card">
-      <h3>🛡️ Strict Host Binding</h3>
-      <p>Powerful 4-phase handle lifecycle to protect C++ native memory from leaks or dangling pointers.</p>
+      <h3>🛡️ Host Integration</h3>
+      <p>Lifecycle-managed handles for safe C++ native memory bridging and pointer protection.</p>
     </div>
   </div>
 </div>

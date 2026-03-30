@@ -1,34 +1,78 @@
 # Control Flow
 
-Zephyr leverages robust pattern extraction into standard loop mechanics, reducing repetitive unrolling overheads during iterative parsing.
+Zephyr provides standard branching and looping constructs for managing execution flow. 
 
-## Branches (`if`, `if let`)
+## Branches (if / else)
+
+Conditional branching is performed via the `if` and `else` keywords. Braces `{}` are mandatory for all blocks.
+
 ```zephyr
-if value > 0 {
-  print("positive");
+if value > 10 {
+    print("Greater than 10");
+} else if value == 10 {
+    print("Exactly 10");
 } else {
-  print("non-negative");
-}
-
-// Pattern extraction destructuring evaluated directly as branching bounds
-if let Event::Hit(Hit { damage, crit: true }) = event {
-  print(damage);
+    print("Less than 10");
 }
 ```
 
-## Loops (`while`, `while let`, `for-in`)
+### if let
+
+The `if let` construct combines pattern matching with conditional branching. The block executes only if the pattern successfully matches the input value.
+
 ```zephyr
-// Continuous pair extractor using implicit iterators
-while let [name, hp] = next_pair() {
-  print(name);
+if let Ok(data) = get_resource() {
+    print(data);
 }
+```
+
+## Loops
+
+Zephyr supports several looping mechanisms for repetitive execution.
+
+### while
+
+The `while` loop continues execution as long as the specified boolean condition remains `true`.
+
+```zephyr
+let mut i = 0;
+while i < 5 {
+    print(i);
+    i += 1;
+}
+```
+
+### while let
+
+Similar to `if let`, the `while let` loop continues as long as the pattern successfully matches the value returned by the expression.
+
+```zephyr
+while let Some(msg) = queue.pop() {
+    process(msg);
+}
+```
+
+### for-in
+
+The `for-in` loop is used to iterate over a sequence, such as a range or a collection that implements the iterator protocol.
+
+```zephyr
+// Exclusive range
+for i in 0..5 {
+    print(i); // 0, 1, 2, 3, 4
+}
+
+// Inclusive range
+for i in 0..=5 {
+    print(i); // 0, 1, 2, 3, 4, 5
+}
+```
 
 // Sequence iteration
 for item in values {
   print(item);
 }
 
-// Range bounds iteration (exclusive)
 for i in 0..n {
   print(i);
 }
@@ -36,5 +80,50 @@ for i in 0..n {
 // Range bounds iteration (inclusive)
 for i in 0..=n {
   print(i);
+}
+```
+
+## Break & Continue
+
+You can manipulate loop execution flow using `break` to exit the loop or `continue` to skip the rest of the current iteration:
+
+```zephyr
+mut i = 0;
+while true {
+    if i >= 3 { break; } // Exit loop entirely
+    print(i);
+    i += 1;
+}
+// 0 1 2
+
+for i in 0..6 {
+    if i % 2 == 0 { continue; } // Skip to next iteration
+    print(i);
+}
+// 1 3 5
+```
+
+## Iterator Protocol
+
+Types that implement the built-in iterator protocol can be used directly in `for in` loops:
+
+```zephyr
+trait Iterator {
+    fn has_next(self) -> bool;
+    fn next(self) -> any;
+}
+```
+
+The `std/collections` types (`Map`, `Set`, `Queue`) all implement this protocol out of the box.
+
+```zephyr
+import { Map } from "std/collections";
+
+let scores = Map::new();
+scores.set("Alice", 100);
+scores.set("Bob", 95);
+
+for entry in scores {
+    print(f"{entry.key}: {entry.value}");
 }
 ```

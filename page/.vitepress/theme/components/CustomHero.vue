@@ -15,8 +15,8 @@
 
       <!-- Phase 2+: Buttons morph in -->
       <div class="zs-actions" :class="phase >= 2 ? 'zs-morph-in-delayed' : 'zs-hidden'">
-        <a :href="primaryLink" class="zs-btn zs-btn-primary">{{ primaryText }}</a>
-        <a :href="secondaryLink" class="zs-btn zs-btn-ghost">{{ secondaryText }}</a>
+        <a :href="withBase(primaryLink)" class="zs-btn zs-btn-primary">{{ primaryText }}</a>
+        <a :href="withBase(secondaryLink)" class="zs-btn zs-btn-ghost">{{ secondaryText }}</a>
       </div>
 
     </div>
@@ -25,6 +25,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { withBase } from 'vitepress';
 import BrandLogo from './BrandLogo.vue';
 
 const props = defineProps({
