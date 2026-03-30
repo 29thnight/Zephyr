@@ -1,0 +1,95 @@
+cmake_minimum_required(VERSION 3.20)
+project(Zephyr LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ─── Build options ────────────────────────────────────────────────────────────
+option(ZEPHYR_BUILD_CLI   "Build zephyr_cli executable"  ON)
+option(ZEPHYR_BUILD_TESTS "Build zephyr_tests executable" ON)
+option(ZEPHYR_ENABLE_PGO  "Enable PGO instrumentation (MSVC /GL+/LTCG)"  OFF)
+
+# ─── ZephyrRuntime (static library) ──────────────────────────────────────────
+add_library(ZephyrRuntime STATIC
+    src/zephyr.cpp
+    src/zephyr_gc.cpp
+)
+
+target_include_directories(ZephyrRuntime
+    PUBLIC  include
+    PRIVATE src
+)
+
+if(MSVC)
+    target_compile_options(ZephyrRuntime PRIVATE
+        /W3 /permissive- /bigobj
+        $<$<CONFIG:Release>:/O2 /GL>
+        $<$<CONFIG:Debug>:/Od /RTC1>
+    )
+    target_link_options(ZephyrRuntime INTERFACE
+        $<$<CONFIG:Release>:/LTCG>
+    )
+    if(ZEPHYR_ENABLE_PGO)
+        target_compile_options(ZephyrRuntime PRIVATE /GL)
+        target_link_options(ZephyrRuntime INTERFACE /LTCG:PGI)
+    endif()
+else()
+    target_compile_options(ZephyrRuntime PRIVATE
+        -Wall -Wextra
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Debug>:-O0 -g>
+    )
+endif()
+
+# ─── zephyr_cli ──────────────────────────────────────────────────────────────
+if(ZEPHYR_BUILD_CLI)
+    add_executable(zephyr_cli
+        cli/main.cpp
+        cli/lsp_server.cpp
+    )
+    target_link_libraries(zephyr_cli PRIVATE ZephyrRuntime)
+    target_include_directories(zephyr_cli PRIVATE include)
+    if(MSVC)
+        target_compile_options(zephyr_cli PRIVATE /W3 /permissive- /bigobj
+            $<$<CONFIG:Release>:/O2 /GL>)
+        target_link_options(zephyr_cli PRIVATE $<$<CONFIG:Release>:/LTCG>)
+    endif()
+    set_target_properties(zephyr_cli PROPERTIES OUTPUT_NAME "zephyr")
+endif()
+
+# ─── zephyr_tests ─────────────────────────────────────────────────────────────
+if(ZEPHYR_BUILD_TESTS)
+    add_executable(zephyr_tests
+        tests/test_main.cpp
+        tests/test_lexer.cpp
+        tests/test_compiler.cpp
+        tests/test_vm.cpp
+        tests/test_gc.cpp
+        tests/test_host.cpp
+        tests/test_perf.cpp
+        tests/test_corpus.cpp
+    )
+    target_link_libraries(zephyr_tests PRIVATE ZephyrRuntime)
+    target_include_directories(zephyr_tests PRIVATE include tests)
+    if(MSVC)
+        target_compile_options(zephyr_tests PRIVATE /W3 /permissive- /bigobj
+            $<$<CONFIG:Release>:/O2>)
+    endif()
+    # Copy corpus to build dir so tests can find it
+    add_custom_command(TARGET zephyr_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/tests/corpus"
+            "$<TARGET_FILE_DIR:zephyr_tests>/corpus"
+        COMMENT "Copying corpus to test output directory"
+    )
+endif()
+
+# ─── Install ──────────────────────────────────────────────────────────────────
+install(TARGETS ZephyrRuntime
+    ARCHIVE DESTINATION lib
+)
+install(DIRECTORY include/zephyr DESTINATION include)
+if(ZEPHYR_BUILD_CLI)
+    install(TARGETS zephyr_cli RUNTIME DESTINATION bin)
+endif()

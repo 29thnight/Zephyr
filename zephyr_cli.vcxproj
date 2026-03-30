@@ -52,6 +52,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="bench\bench_runner.cpp" />
+    <ClCompile Include="cli\dap_server.cpp" />
     <ClCompile Include="cli\lsp_server.cpp" />
     <ClCompile Include="cli\main.cpp" />
   </ItemGroup>

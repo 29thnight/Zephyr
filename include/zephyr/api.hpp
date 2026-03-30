@@ -150,6 +150,9 @@ struct ZephyrHostObjectRef {
     std::string invalid_reason;
     std::uint32_t slot = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t generation = 0;
+    // Handle Table Indirection: stable ID assigned by VM on construction.
+    // Survives GC compaction — use resolve_host_handle(id) for safe re-lookup.
+    std::uint64_t handle_id = 0;
 };
 
 class ZephyrValue {
@@ -608,6 +611,18 @@ public:
     void set_package_root(const std::string& path);
 
     void invalidate_host_handle(const ZephyrHostObjectRef& handle);
+
+    // ── Item 6: RAII value pinning ────────────────────────────────────────────
+    // Pin a ZephyrValue so it won't be expired by frame/tick handle sweeps.
+    // Returns a pin_id that must be passed to unpin_value() when done.
+    std::uint32_t pin_value(const ZephyrValue& value);
+    void          unpin_value(std::uint32_t pin_id);
+
+    // ── Item 7: Handle Table Indirection ─────────────────────────────────────
+    // Look up a host object by its stable handle_id (ZephyrHostObjectRef::handle_id).
+    // Returns nullptr if the handle has been invalidated or not found.
+    // Safe to call across GC compaction cycles.
+    ZephyrHostObjectRef* resolve_host_handle(std::uint64_t handle_id);
     ZephyrScriptCallbackHandle capture_callback(const ZephyrFunctionHandle& handle);
     void release_callback(const ZephyrScriptCallbackHandle& handle);
     std::optional<ZephyrCoroutineHandle> spawn_coroutine(const ZephyrFunctionHandle& handle, const std::vector<ZephyrValue>& args = {});
@@ -774,6 +789,85 @@ template <typename T>
 ZephyrClassBinder<T> ZephyrVM::bind(std::string_view class_name) {
     return ZephyrClassBinder<T>(*this, class_name);
 }
+
+// ─── ZephyrHandle<T>: RAII smart handle ──────────────────────────────────────
+// Keeps a host-object ZephyrValue alive across frame/tick sweeps and provides
+// typed access to the underlying C++ object.  Uses pin_value/unpin_value
+// internally so the VM knows not to expire the handle.
+//
+// Usage:
+//   auto h = ZephyrHandle<Player>(vm, vm.make_host_object(player_ptr));
+//   if (h) h.get()->damage(10);
+template <typename T>
+class ZephyrHandle {
+public:
+    ZephyrHandle() = default;
+
+    ZephyrHandle(ZephyrVM& vm, ZephyrValue value)
+        : vm_(&vm), value_(std::move(value)),
+          pin_id_(vm.pin_value(value_)) {}
+
+    ~ZephyrHandle() { reset(); }
+
+    ZephyrHandle(ZephyrHandle&& other) noexcept
+        : vm_(other.vm_), value_(std::move(other.value_)), pin_id_(other.pin_id_) {
+        other.vm_     = nullptr;
+        other.pin_id_ = std::numeric_limits<std::uint32_t>::max();
+    }
+
+    ZephyrHandle& operator=(ZephyrHandle&& other) noexcept {
+        if (this != &other) {
+            reset();
+            vm_     = other.vm_;
+            value_  = std::move(other.value_);
+            pin_id_ = other.pin_id_;
+            other.vm_     = nullptr;
+            other.pin_id_ = std::numeric_limits<std::uint32_t>::max();
+        }
+        return *this;
+    }
+
+    ZephyrHandle(const ZephyrHandle&)            = delete;
+    ZephyrHandle& operator=(const ZephyrHandle&) = delete;
+
+    bool valid() const {
+        if (!vm_ || value_.is_nil()) return false;
+        if (!value_.is_host_object()) return false;
+        return value_.as_host_object().valid;
+    }
+    explicit operator bool() const { return valid(); }
+
+    const ZephyrValue& value() const { return value_; }
+
+    // Returns the underlying C++ object pointer, or nullptr if invalid.
+    T* get() const {
+        if (!valid()) return nullptr;
+        const auto& ref = value_.as_host_object();
+        return static_cast<T*>(ref.instance.get());
+    }
+
+    T* operator->() const { return get(); }
+
+    // Returns the stable handle_id for handle-table lookup (Item 7).
+    std::uint64_t handle_id() const {
+        if (!value_.is_host_object()) return 0;
+        return value_.as_host_object().handle_id;
+    }
+
+    void reset() {
+        if (vm_ && pin_id_ != std::numeric_limits<std::uint32_t>::max()) {
+            vm_->unpin_value(pin_id_);
+        }
+        vm_     = nullptr;
+        pin_id_ = std::numeric_limits<std::uint32_t>::max();
+        value_  = ZephyrValue{};
+    }
+
+private:
+    ZephyrVM*     vm_     = nullptr;
+    ZephyrValue   value_;
+    std::uint32_t pin_id_ = std::numeric_limits<std::uint32_t>::max();
+};
 
 #ifdef DEBUG_LEAK_CHECK
 struct ZephyrDebugGcStats {

@@ -10,6 +10,8 @@
 
 // Declared in cli/lsp_server.cpp
 int run_lsp_server(const char* exe_path);
+// Declared in cli/dap_server.cpp
+int run_dap_server(const char* exe_path);
 
 namespace {
 
@@ -49,7 +51,8 @@ void print_usage() {
               << "  zephyr stats <file>\n"
               << "  zephyr dump-bytecode <file> [function]\n"
               << "  zephyr bench [output.json] [--baseline <json>] [--strict]\n"
-              << "  zephyr lsp              Start LSP server (stdin/stdout)\n";
+              << "  zephyr lsp              Start LSP server (stdin/stdout)\n"
+              << "  zephyr dap              Start DAP debug server (stdin/stdout)\n";
 }
 
 std::string runtime_stats_json(const zephyr::ZephyrRuntimeStats& stats, const zephyr::GCPauseStats& gc_pause_stats) {
@@ -272,6 +275,9 @@ int main(int argc, char** argv) {
         }
         if (command == "lsp") {
             return run_lsp_server(argv[0]);
+        }
+        if (command == "dap") {
+            return run_dap_server(argv[0]);
         }
         if (command == "bench") {
             std::optional<std::filesystem::path> output_path;

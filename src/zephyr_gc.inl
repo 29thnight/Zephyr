@@ -6547,8 +6547,21 @@ RuntimeResult<ModuleRecord*> Runtime::load_file_record(const std::filesystem::pa
     const std::uint64_t file_mtime = module_file_mtime(resolved);
     auto it = modules_.find(key);
     if (it != modules_.end() && it->second.file_mtime != 0 && file_mtime != 0 && it->second.file_mtime != file_mtime) {
-        modules_.erase(it);
-        it = modules_.end();
+        // mtime changed — read source and check content hash before evicting
+        auto read_result = read_all_text(resolved);
+        if (read_result) {
+            const std::uint64_t new_hash = bytecode_cache::fnv1a_64(*read_result);
+            if (new_hash != it->second.source_hash) {
+                modules_.erase(it);
+                it = modules_.end();
+            } else {
+                // Same content despite mtime change (e.g. touch), just update mtime
+                it->second.file_mtime = file_mtime;
+            }
+        } else {
+            modules_.erase(it);
+            it = modules_.end();
+        }
     }
     if (it == modules_.end()) {
         ModuleRecord record;
@@ -6565,12 +6578,32 @@ RuntimeResult<ModuleRecord*> Runtime::load_file_record(const std::filesystem::pa
                     record.bytecode.reset();
                 }
             }
+            // If mtime differs but hash matches, also try hash-based cache lookup
+            if (record.bytecode == nullptr && cache_it != bytecode_cache_.end()) {
+                // source will be read below; hash comparison happens after
+            }
         }
         if (record.bytecode == nullptr) {
             ZEPHYR_TRY_ASSIGN(source, read_all_text(resolved));
             record.source_text = source;
-            ZEPHYR_TRY_ASSIGN(program, parse_source(source, key));
-            record.program = std::move(program);
+            record.source_hash = bytecode_cache::fnv1a_64(source);
+            // Hash-based cache hit: same content, different mtime
+            if (bytecode_cache_enabled_) {
+                auto cache_it = bytecode_cache_.find(key);
+                if (cache_it != bytecode_cache_.end() && cache_it->second.content_hash == record.source_hash) {
+                    record.bytecode = bytecode_cache::deserialize_module_bytecode(cache_it->second.serialized_bytecode);
+                    if (record.bytecode != nullptr && !bytecode_cache_roundtrip_supported(record.bytecode.get())) {
+                        record.bytecode.reset();
+                    }
+                    if (record.bytecode == nullptr) {
+                        bytecode_cache_.erase(cache_it);
+                    }
+                }
+            }
+            if (record.bytecode == nullptr) {
+                ZEPHYR_TRY_ASSIGN(program, parse_source(source, key));
+                record.program = std::move(program);
+            }
         }
         record.environment = allocate_pinned<Environment>(root_environment_, EnvironmentKind::Module);
         record.namespace_object = allocate_pinned<ModuleNamespaceObject>(key, record.environment);
@@ -6701,6 +6734,7 @@ RuntimeResult<Value> Runtime::run_program(ModuleRecord& module) {
         if (bytecode_cache_enabled_ && !module.path.empty() && module.bytecode != nullptr) {
             bytecode_cache_[module.name] =
                 BytecodeCacheEntry{module.path.string(), module.file_mtime,
+                                   module.source_hash,
                                    bytecode_cache::serialize_module_bytecode(*module.bytecode)};
         }
     }
@@ -10857,6 +10891,8 @@ HostHandleToken Runtime::register_host_handle(const ZephyrHostObjectRef& host_ob
     HostHandleEntry entry;
     entry.generation = host_object.generation != 0 ? host_object.generation : 1;
     const std::uint32_t slot = static_cast<std::uint32_t>(host_handles_.size());
+    // Assign stable handle_id for handle-table indirection (Item 7)
+    entry.handle_id = next_handle_id_++;
     apply_metadata(entry, slot);
     host_handles_.push_back(std::move(entry));
     return HostHandleToken{slot, host_handles_.back().generation};
@@ -13557,6 +13593,50 @@ ZephyrValue ZephyrVM::make_host_object(std::shared_ptr<ZephyrHostClass> host_cla
     return impl_->runtime.make_host_object(std::move(host_class), std::move(instance));
 }
 void ZephyrVM::invalidate_host_handle(const ZephyrHostObjectRef& handle) { impl_->runtime.invalidate_host_handle(handle); }
+
+// ── Item 6: RAII value pinning ─────────────────────────────────────────────
+std::uint32_t Runtime::pin_value(const ZephyrValue& value) {
+    const std::uint32_t id = next_pin_id_++;
+    pinned_values_[id] = value;
+    return id;
+}
+void Runtime::unpin_value(std::uint32_t pin_id) {
+    pinned_values_.erase(pin_id);
+}
+
+std::uint32_t ZephyrVM::pin_value(const ZephyrValue& value)  { return impl_->runtime.pin_value(value); }
+void          ZephyrVM::unpin_value(std::uint32_t pin_id)    { impl_->runtime.unpin_value(pin_id); }
+
+// ── Item 7: Handle Table Indirection ─────────────────────────────────────
+ZephyrHostObjectRef* Runtime::resolve_host_handle(std::uint64_t handle_id) {
+    if (handle_id == 0) return nullptr;
+    for (auto& entry : host_handles_) {
+        if (entry.handle_id == handle_id && !entry.invalid()) {
+            auto inst = entry.instance.lock();
+            if (!inst) return nullptr;
+            static thread_local ZephyrHostObjectRef tl_ref;
+            tl_ref.host_class       = entry.host_class;
+            tl_ref.instance         = std::move(inst);
+            tl_ref.kind             = entry.kind;
+            tl_ref.lifetime         = entry.lifetime;
+            tl_ref.strong_residency = (entry.flags & HostHandleStrongResidencyBit) != 0;
+            tl_ref.stable_guid      = entry.stable_guid;
+            tl_ref.policy           = entry.policy;
+            tl_ref.has_explicit_policy = true;
+            tl_ref.valid            = true;
+            tl_ref.invalid_reason.clear();
+            tl_ref.slot             = entry.runtime_slot;
+            tl_ref.generation       = entry.generation;
+            tl_ref.handle_id        = entry.handle_id;
+            return &tl_ref;
+        }
+    }
+    return nullptr;
+}
+ZephyrHostObjectRef* ZephyrVM::resolve_host_handle(std::uint64_t handle_id) {
+    return impl_->runtime.resolve_host_handle(handle_id);
+}
+
 ZephyrScriptCallbackHandle ZephyrVM::capture_callback(const ZephyrFunctionHandle& handle) { return impl_->runtime.capture_callback(handle); }
 void ZephyrVM::release_callback(const ZephyrScriptCallbackHandle& handle) { impl_->runtime.release_callback(handle); }
 std::optional<ZephyrCoroutineHandle> ZephyrVM::spawn_coroutine(const ZephyrFunctionHandle& handle, const std::vector<ZephyrValue>& args) {

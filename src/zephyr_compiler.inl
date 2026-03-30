@@ -948,6 +948,7 @@ struct ModuleRecord {
     Environment* environment = nullptr;
     ModuleNamespaceObject* namespace_object = nullptr;
     std::uint64_t file_mtime = 0;
+    std::uint64_t source_hash = 0;   // FNV-1a 64-bit hash of source text
     bool loaded = false;
     bool loading = false;
     std::string source_text;   // original source for error display
@@ -956,6 +957,7 @@ struct ModuleRecord {
 struct BytecodeCacheEntry {
     std::string source_path;
     std::uint64_t file_mtime = 0;
+    std::uint64_t content_hash = 0;   // FNV-1a 64-bit hash of source text
     std::vector<std::uint8_t> serialized_bytecode;
 };
 
@@ -978,6 +980,16 @@ struct HostModuleRecord {
 namespace bytecode_cache {
 
 constexpr std::uint32_t kFormatVersion = 2;
+
+// FNV-1a 64-bit hash — deterministic, no external dependency
+inline std::uint64_t fnv1a_64(const std::string& s) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char c : s) {
+        hash ^= static_cast<std::uint64_t>(c);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
 
 inline void append_u8(std::vector<std::uint8_t>& out, std::uint8_t value) {
     out.push_back(value);
@@ -1387,6 +1399,7 @@ struct HostHandleEntry {
     std::uint32_t tick_epoch = 0;
     std::uint32_t scene_epoch = 0;
     std::uint32_t runtime_slot = 0;
+    std::uint64_t handle_id = 0;    // stable ID for handle-table indirection (Item 7)
     ZephyrGuid128 stable_guid{};
     ZephyrHostHandlePolicy policy{};
     std::shared_ptr<ZephyrHostClass> host_class;
@@ -2985,6 +2998,9 @@ public:
     // drops to zero, reducing long-term memory usage.
     void compact_old_generation();
     void invalidate_host_handle(const ZephyrHostObjectRef& handle);
+    std::uint32_t    pin_value(const ZephyrValue& value);
+    void             unpin_value(std::uint32_t pin_id);
+    ZephyrHostObjectRef* resolve_host_handle(std::uint64_t handle_id);
     ZephyrVM::RuntimeStats runtime_stats() const;
     std::uint64_t gc_pause_percentile(int pct) const;
     GCPauseStats get_gc_pause_stats() const;
@@ -3043,7 +3059,11 @@ public:
     void install_core();
 
     ZephyrValue make_host_object(std::shared_ptr<ZephyrHostClass> host_class, std::shared_ptr<void> instance) {
-        return ZephyrValue(ZephyrHostObjectRef{std::move(host_class), std::move(instance)});
+        ZephyrHostObjectRef ref;
+        ref.host_class = std::move(host_class);
+        ref.instance   = std::move(instance);
+        ref.handle_id  = next_handle_id_++;   // stable handle-table ID (Item 7)
+        return ZephyrValue(std::move(ref));
     }
 
     void define_value(Environment* environment, const std::string& name, Value value, bool mutable_value,
@@ -3476,6 +3496,16 @@ private:
     std::size_t full_gc_heap_before_ = 0;
     std::uint64_t frame_budget_miss_count_ = 0;
     std::uint64_t next_coroutine_trace_id_ = 1;
+
+    // ── Item 6: RAII value pinning ────────────────────────────────────────────
+    // Pinned ZephyrValues are exempt from frame/tick handle expiry.
+    std::unordered_map<std::uint32_t, ZephyrValue> pinned_values_;
+    std::uint32_t next_pin_id_ = 1;
+
+    // ── Item 7: Handle Table Indirection ─────────────────────────────────────
+    // Stable monotonic ID assigned to every host object at construction.
+    // Enables C++ code to re-resolve handles after GC compaction.
+    std::uint64_t next_handle_id_ = 1;
 
     friend class ZephyrModuleBinder;
 };

@@ -1,0 +1,12 @@
+fn safe_div(a: int, b: int) {
+    if b == 0 { return Err("zero"); }
+    Ok(a / b)
+}
+fn compute() {
+    let x = safe_div(10, 2)?;
+    Ok(x)
+}
+match compute() {
+    Ok(v) => print(v),
+    Err(e) => print(e),
+}

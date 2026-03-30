@@ -1,0 +1,6 @@
+let r = Ok(42);
+let v = match r {
+    Ok(x) => x,
+    Err(e) => 0,
+};
+print(v);
