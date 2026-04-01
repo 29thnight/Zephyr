@@ -1,9 +1,5 @@
 {
-  "generated_at_utc": "2026-04-01T01:24:52Z",
-  
-  
-  
-  
+  "generated_at_utc": "2026-04-01T01:42:35Z",
   "strict_gates": false,
   "all_required_gates_passed": true,
   "passed_gates": 5,
@@ -15,10 +11,10 @@
       "description": "Loads a file-backed module with relative import and executes main().",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 613800,
-      "mean_ns": 637820,
-      "max_ns": 680300,
-      "p95_ns": 678000,
+      "min_ns": 641600,
+      "mean_ns": 656310,
+      "max_ns": 681500,
+      "p95_ns": 674800,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -34,7 +30,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 1,
       "last_result": "42",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -80,10 +76,10 @@
       "description": "Runs a tight arithmetic loop to track raw bytecode throughput.",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 390200,
-      "mean_ns": 410100,
-      "max_ns": 455400,
-      "p95_ns": 422200,
+      "min_ns": 394900,
+      "mean_ns": 414325,
+      "max_ns": 446100,
+      "p95_ns": 446000,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -99,7 +95,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 0,
       "last_result": "59997",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -145,10 +141,10 @@
       "description": "Allocates arrays and structs repeatedly to stress nursery and promotion policy.",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 953400,
-      "mean_ns": 1051000,
-      "max_ns": 1171000,
-      "p95_ns": 1148400,
+      "min_ns": 970400,
+      "mean_ns": 1036780,
+      "max_ns": 1189200,
+      "p95_ns": 1171700,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -164,7 +160,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 0,
       "last_result": "9373750",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -210,10 +206,10 @@
       "description": "Exercises repeated entity handle resolution, member access, and host calls.",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 219100,
-      "mean_ns": 225005,
-      "max_ns": 273900,
-      "p95_ns": 227400,
+      "min_ns": 219200,
+      "mean_ns": 221610,
+      "max_ns": 224700,
+      "p95_ns": 224400,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -229,7 +225,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 1,
       "last_result": "-900750",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -275,10 +271,10 @@
       "description": "Creates a retained coroutine handle and resumes it until completion.",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 209500,
-      "mean_ns": 220035,
-      "max_ns": 229000,
-      "p95_ns": 227400,
+      "min_ns": 206800,
+      "mean_ns": 229500,
+      "max_ns": 393000,
+      "p95_ns": 258600,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -294,7 +290,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 0,
       "last_result": "400",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -340,10 +336,10 @@
       "description": "Serializes and deserializes a save-safe Stable host handle payload.",
       "warmup_iterations": 5,
       "measure_iterations": 20,
-      "min_ns": 20200,
-      "mean_ns": 21545,
-      "max_ns": 28300,
-      "p95_ns": 22500,
+      "min_ns": 20000,
+      "mean_ns": 21305,
+      "max_ns": 22200,
+      "p95_ns": 22100,
       "mean_full_gc_cycles": 0,
       "mean_young_gc_cycles": 0,
       "mean_promotions": 0,
@@ -359,7 +355,7 @@
       "mean_global_binding_cache_hits": 0,
       "mean_global_binding_cache_misses": 1,
       "last_result": "[<host:AssetRef>, Exported { value: 9 }]",
-      "last_stats":       {
+      "last_stats": {
         "frame_epoch": 0,
         "tick_epoch": 0,
         "scene_epoch": 0,
@@ -415,9 +411,9 @@
       "name": "hot_arithmetic_vs_v1",
       "status": "pass",
       "detail": "improvement=99.96% target=25%",
-      "current_value": 410100,
-      "baseline_value": 1e+09,
-      "target_value": 7.5e+08,
+      "current_value": 414325,
+      "baseline_value": 1000000000.0,
+      "target_value": 750000000.0,
       "unit": "ns"
     },
     {
@@ -432,8 +428,8 @@
     {
       "name": "host_handle_resolve_cost_vs_v1",
       "status": "pass",
-      "detail": "current=75.00ns/resolve baseline=33333.33ns/resolve limit=36666.67ns/resolve",
-      "current_value": 75.0017,
+      "detail": "current=73.87ns/resolve baseline=33333.33ns/resolve limit=36666.67ns/resolve",
+      "current_value": 73.87,
       "baseline_value": 33333.3,
       "target_value": 36666.7,
       "unit": "ns_per_resolve"
@@ -441,12 +437,11 @@
     {
       "name": "coroutine_resume_cost_vs_v1",
       "status": "pass",
-      "detail": "current=548.72ns/resume baseline=74812.97ns/resume limit=82294.26ns/resume",
-      "current_value": 548.716,
+      "detail": "current=572.32ns/resume baseline=74812.97ns/resume limit=82294.26ns/resume",
+      "current_value": 572.319,
       "baseline_value": 74813,
       "target_value": 82294.3,
       "unit": "ns_per_resume"
     }
   ]
 }
-

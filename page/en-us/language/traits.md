@@ -2,17 +2,7 @@
 
 Provides structural abstraction capabilities resembling interfaces or C++ pure abstract behavior.
 
-## Behavior Bounds (`trait`)
-Promises a specific method signature contract that types must rigidly fulfill.
-
-```zephyr
-trait Drawable {
-    fn draw(self) -> void;
-    fn get_bounds(self) -> Rect;
-}
-```
-
-## Traits
+## Defining a Trait
 
 Traits define a shared interface — a named set of method signatures that types must implement.
 
@@ -111,24 +101,6 @@ impl Vec2 {
         return sqrt(self.x * self.x + self.y * self.y);
     }
 }
-```
-
-## Multiple Traits
-
-A single type can implement multiple traits to fulfill different functional requirements.
-
-```zephyr
-trait Scalable {
-    fn scale(self, factor: float) -> void;
-}
-
-impl Scalable for Sprite {
-    fn scale(self, factor: float) -> void {
-        // Scaling logic
-    }
-}
-
-// Sprite now implements both Drawable and Scalable.
 ```
 
 ## Self Type

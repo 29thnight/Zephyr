@@ -16,6 +16,7 @@ This document provides a detailed technical description of the Zephyr programmin
 - [3. Runtime Virtual Machine](#3-runtime-virtual-machine)
   - [3.1 VM Structure](#31-vm-structure)
   - [3.2 Instruction Set](#32-instruction-set)
+    - [3.2.1 Inline Cache (IC)](#321-inline-cache-ic)
   - [3.3 Register Spill Fallback](#33-register-spill-fallback)
   - [3.4 Coroutine Model](#34-coroutine-model)
   - [3.5 Module Bytecode Caching](#35-module-bytecode-caching)
@@ -173,13 +174,59 @@ The compiler walks the resolved AST and emits IR instructions with virtual (unli
 
 ### 2.7 Superinstruction Fusion
 
-After register allocation, a peephole pass collapses common instruction pairs into fused opcodes:
+After register allocation, a peephole pass in `optimize_register_bytecode()` collapses common instruction patterns into fused opcodes. The pass iterates `while(changed)` and handles both adjacent and non-adjacent (loop back-edge) patterns.
 
-| Pattern | Fused Opcode |
+#### Adjacent Patterns
+
+| Pattern | Fused Opcode | Description |
+|---|---|---|
+| `R_ADD/SUB/MUL` + `R_MOVE(dst, result)` | `R_SI_ADD/SUB/MUL_STORE` | Arithmetic + destination move |
+| `R_MODI(tmp,src,imm)` + `R_MOVE(dst,tmp)` | `R_MODI(dst,src,imm)` | Eliminate temporary register |
+| `R_ADDI(dst,src,imm)` + `R_JUMP(target)` | `R_ADDI_JUMP` | Increment + unconditional branch |
+| `R_CMP*` + `R_JUMP_IF_FALSE` | `R_SI_CMP_JUMP_FALSE` | Compare + conditional branch |
+| `R_LOAD_INT(tmp,imm)` + `R_SI_CMP_JUMP_FALSE` | `R_SI_CMPI_JUMP_FALSE` | Immediate compare + conditional branch |
+| `R_MODI(tmp,src,imm)` + `R_SI_ADD_STORE(dst,acc,tmp)` | `R_SI_MODI_ADD_STORE` | `dst = acc + (src % imm)` |
+
+#### Non-Adjacent Loop Patterns
+
+Detected via `R_ADDI_JUMP`'s `ic_slot` field (jump target index):
+
+| Pattern | Fused Opcode | Description |
+|---|---|---|
+| `R_ADDI_JUMP(reg,+N)` → target: `R_SI_CMPI_JUMP_FALSE(reg,limit)` | `R_SI_ADDI_CMPI_LT_JUMP` | Loop increment + bound check |
+| `R_SI_MODI_ADD_STORE(acc,acc,iter,div)` + `R_SI_ADDI_CMPI_LT_JUMP(iter,step,limit)` | `R_SI_LOOP_STEP` | Entire loop step as 1 opcode |
+
+#### R_SI_LOOP_STEP
+
+The most aggressively fused superinstruction. Executes three operations atomically:
+
+```
+accum += iter % div
+iter  += step
+if iter < limit then goto body_start
+```
+
+**Encoding** (within the 24-byte `CompactInstruction`):
+
+| Field | Role |
 |---|---|
-| `R_ADD` + `R_STORE` | `SI_ADD_STORE` |
-| `R_CMP` + `R_JUMP_IF_FALSE` | `SI_CMP_JUMP` |
-| `R_LOAD_CONST` + `R_ADD` | `SI_CONST_ADD` |
+| `dst` (uint8) | Accumulator register |
+| `src1` (uint8, reinterpreted as int8) | Loop step (`step`) |
+| `src2` (uint8) | Loop counter register (`iter`) |
+| `operand_a` (uint8) | Modulo divisor (`div`, 1–255) |
+| `ic_slot[15:0]` (uint16) | Loop body start address |
+| `ic_slot[31:16]` (int16) | Loop upper bound (`limit`) |
+
+**Fusion conditions:** `dst==src1` (self-accumulating), same iter register, `body_start ≤ 0xFFFF`, `step ∈ [-128,127]`, `limit ∈ [-32768,32767]`
+
+**Effect on `hot_arithmetic`:**
+
+| Stage | ops/iter | Time |
+|---|---|---|
+| Base register VM | ~6 | 2,170 µs |
+| +R_SI_MODI_ADD_STORE | 3 | 692 µs |
+| +R_SI_ADDI_CMPI_LT_JUMP | 2 | 516 µs |
+| +R_SI_LOOP_STEP | **1** | **~420 µs** |
 
 ---
 
@@ -200,8 +247,10 @@ All opcodes are prefixed `R_` (register-based). Key opcodes:
 | Opcode | Description |
 |---|---|
 | `R_LOAD_CONST` | Load constant pool entry into register |
+| `R_LOAD_INT` | Load immediate integer into register |
 | `R_MOVE` | Copy register to register |
 | `R_ADD/SUB/MUL/DIV` | Arithmetic |
+| `R_ADDI/MODI` | Arithmetic with immediate operand |
 | `R_CMP_EQ/LT/LE` | Comparison → bool register |
 | `R_JUMP/R_JUMP_IF_FALSE` | Unconditional / conditional branch |
 | `R_CALL` | Call function in register |
@@ -209,9 +258,28 @@ All opcodes are prefixed `R_` (register-based). Key opcodes:
 | `R_YIELD` | Suspend coroutine, return value to caller |
 | `R_RESUME` | Resume suspended coroutine |
 | `R_GET_FIELD/R_SET_FIELD` | Struct field access |
+| `R_BUILD_STRUCT` | Allocate and initialise struct literal |
 | `R_SPILL_LOAD/R_SPILL_STORE` | Heap spill for >256 locals |
-| `SI_ADD_STORE` | Fused add+store superinstruction |
-| `SI_CMP_JUMP` | Fused compare+branch superinstruction |
+| `R_SI_ADD/SUB/MUL_STORE` | Fused arithmetic + destination store |
+| `R_SI_CMP_JUMP_FALSE` | Fused compare + conditional branch |
+| `R_SI_CMPI_JUMP_FALSE` | Fused immediate compare + conditional branch |
+| `R_ADDI_JUMP` | Fused increment + unconditional branch |
+| `R_SI_ADDI_CMPI_LT_JUMP` | Fused increment + bound check + conditional branch |
+| `R_SI_MODI_ADD_STORE` | Fused `dst = acc + (src % imm)` |
+| `R_SI_LOOP_STEP` | Entire counted loop step: accum, increment, branch |
+
+### 3.2.1 Inline Cache (IC)
+
+`CompactInstruction` carries two mutable cache fields:
+
+```cpp
+mutable Shape*   ic_shape;   // cached Shape* or type pointer
+mutable uint32_t ic_slot;    // cached field index or state flag
+```
+
+**R_BUILD_STRUCT IC** — on the first execution, checks that field declaration order matches the struct type's field order, then stores `StructTypeObject*` in `ic_shape` and sets `ic_slot = 1`. Subsequent calls skip `parse_type_name`, `expect_struct_type`, `field_slot` lookup, `enforce_type`, and `validate_handle_store`, reducing struct literal creation from a 6-step string-traversal path to a 4-step direct-allocation path.
+
+**StructTypeObject::cached_shape** — `initialize_struct_instance()` previously called `shape_for_struct_type()` on every instantiation (vector alloc + string concat + hashmap lookup). The first call now populates `type->cached_shape`; subsequent calls use the cached pointer directly.
 
 ### 3.3 Register Spill Fallback
 
@@ -520,12 +588,12 @@ tests/
 
 Benchmark suite (`bench/`): 5 acceptance gates with baseline comparison against `bench/results/v1_baseline.json`. Non-zero exit on gate failure for CI regression gating.
 
-Latest results (2026-03-30):
+Latest results (2026-04-01):
 
-| Case | Mean | Gate |
-|---|---|---|
-| module_import | 838 µs | ✅ |
-| hot_arithmetic_loop | 1.13 ms | ✅ |
-| array_object_churn | 4.31 ms | ✅ |
-| host_handle_entity | 1.92 ms | ✅ |
-| coroutine_yield_resume | 238 µs | ✅ |
+| Case | Mean | Lua 5.5 | Ratio | Gate |
+|---|---|---|---|---|
+| module_import | 838 µs | — | — | ✅ |
+| hot_arithmetic_loop | ~420 µs | 394 µs | 1.07× | ✅ |
+| array_object_churn | ~1,050 µs | 1,909 µs | **0.55×** | ✅ |
+| host_handle_entity | ~224 µs | 303 µs | **0.74×** | ✅ |
+| coroutine_yield_resume | ~220 µs | 923 µs | **0.24×** | ✅ |

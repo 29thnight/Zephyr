@@ -89,4 +89,17 @@ Use `vm.set_package_root()` in the host to resolve imports relative to the packa
 
 ## Module Bytecode Caching
 
-Compiled modules are cached as `.zphc` files. The compiler automatically invalidates the cache if the source file is modified.
+Compiled modules are cached as `.zphc` files alongside the source. The compiler compares the source `mtime` on each load and reuses the cache if unchanged, skipping parsing and type-checking entirely.
+
+---
+
+## Standard Library (`std/*`)
+
+Zephyr ships a standard library covering common game scripting needs:
+
+- `std/math`: `sqrt`, `abs`, `lerp`, `clamp`, `sin`, `cos`
+- `std/string`: `split`, `trim`, `replace`, `to_upper`
+- `std/collections`: `Map<K,V>`, `Set<T>`, `Queue<T>`, `Stack<T>`
+- `std/json`: `parse(s: string) -> Result<any>`, `stringify(v: any) -> string`
+- `std/io`: `read_file`, `write_file`
+- `std/gc`, `std/profiler`: GC control and benchmarking tools
