@@ -3594,9 +3594,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     default:               cmp_val = false;   break;
                     }
                     if (cmp_val) {
-                        ++ip;  // Common case: condition true — no metadata access needed.
+                        ++ip;
                     } else {
-                        // Condition false: load the jump target from metadata.
                         const InstructionMetadata& metadata = metadata_ptr[ip];
                         ip = metadata.jump_table.empty()
                            ? ip + 1

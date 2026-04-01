@@ -259,8 +259,7 @@ op_R_SI_CMP_JUMP_FALSE: {
             ++ip;
             DISPATCH();
         }
-        /* Condition FALSE: jump target is in InstructionMetadata (C++ side) */
-        /* Fall back to slow path so C++ can read the metadata jump target */
+        /* Condition FALSE: fall back to C++ for metadata jump target lookup */
         s->ip = ip;
         s->regs = regs;
         return ZVM_SLOW_OPCODE;
