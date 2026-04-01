@@ -259,7 +259,12 @@ op_R_SI_CMP_JUMP_FALSE: {
             ++ip;
             DISPATCH();
         }
-        /* Condition FALSE: fall back to C++ for metadata jump target lookup */
+        /* Condition FALSE: use jump_target for O(1) direct access */
+        if (i->jump_target >= 0) {
+            ip = (size_t)i->jump_target;
+            DISPATCH();
+        }
+        /* Fall back to C++ for metadata jump target lookup */
         s->ip = ip;
         s->regs = regs;
         return ZVM_SLOW_OPCODE;
