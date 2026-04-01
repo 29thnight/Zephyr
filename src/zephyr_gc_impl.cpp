@@ -2927,47 +2927,56 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 if (callee_val.is_object() && callee_val.as_object()->kind == ObjectKind::ScriptFunction) {
                     auto* function = static_cast<ScriptFunctionObject*>(callee_val.as_object());
                     if (function->bytecode != nullptr && function->bytecode->uses_register_mode) {
-                        // Save current frame (chunk=nullptr if same function → skip restore)
-                        const bool same_func = (function->bytecode.get() == active_chunk);
+                        if (function->bytecode.get() == active_chunk) {
+                            // ── Ultra-fast same-function recursion ──
+                            // Skip: chunk save/restore, instructions_ptr update, reg_count recompute,
+                            //       call_env/module_env save (all identical for same function)
+                            iterative_call_stack_.push_back({
+                                ip + 1, active_reg_base, active_reg_count, dst,
+                                nullptr, nullptr, nullptr, nullptr
+                            });
+                            active_reg_base = register_sp_;
+                            register_sp_ += active_reg_count;  // same reg count
+                            if (register_sp_ > register_pool_.size()) {
+                                register_pool_.resize(register_sp_ * 2, Value::nil());
+                            }
+                            Value* old_regs = regs_ptr;
+                            regs_ptr = register_pool_.data() + active_reg_base;
+                            for (std::uint8_t i = 0; i < argc; ++i) {
+                                regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
+                            }
+                            ip = 0;
+                            continue;
+                        }
+                        // ── Different-function call ──
                         iterative_call_stack_.push_back({
                             ip + 1, active_reg_base, active_reg_count, dst,
-                            same_func ? nullptr : active_chunk,
-                            active_call_env, active_module_name, active_module_env
+                            active_chunk, active_call_env, active_module_name, active_module_env
                         });
-
-                        // Switch to callee frame
-                        if (!same_func) {
-                            active_chunk = function->bytecode.get();
-                            instructions_ptr = active_chunk->instructions.data();
-                            metadata_ptr = active_chunk->metadata.data();
-                            constants_ptr = active_chunk->constants.data();
-                            instructions_size = active_chunk->instructions.size();
-                        }
+                        active_chunk = function->bytecode.get();
                         active_call_env = function->closure;
                         active_module_env = function->closure;
-
-                        const std::size_t new_reg_count = static_cast<std::size_t>(
-                            std::max({active_chunk->max_regs, active_chunk->local_count, 0}));
-                        const std::size_t new_reg_base = register_sp_;
-                        register_sp_ += new_reg_count;
-                        if (register_sp_ > register_pool_.size()) {
-                            register_pool_.resize(register_sp_ * 2, Value::nil());
-                        }
-                        Value* new_regs = register_pool_.data() + new_reg_base;
-                        // Copy arguments directly — skip std::fill_n (compiler guarantees writes before reads)
-                        for (std::uint8_t i = 0; i < argc && i < new_reg_count; ++i) {
-                            new_regs[i] = regs_ptr[static_cast<std::uint8_t>(args_start + i)];
-                        }
-
-                        active_reg_base = new_reg_base;
-                        active_reg_count = new_reg_count;
-                        regs_ptr = new_regs;
-                        ip = 0;
                         instructions_ptr = active_chunk->instructions.data();
                         metadata_ptr = active_chunk->metadata.data();
                         constants_ptr = active_chunk->constants.data();
                         instructions_size = active_chunk->instructions.size();
-                        continue;  // Re-enter the while loop — no C++ recursion
+
+                        const int mr = active_chunk->max_regs;
+                        const int lc = active_chunk->local_count;
+                        const std::size_t new_reg_count = static_cast<std::size_t>(mr > lc ? mr : lc);
+                        active_reg_base = register_sp_;
+                        register_sp_ += new_reg_count;
+                        if (register_sp_ > register_pool_.size()) {
+                            register_pool_.resize(register_sp_ * 2, Value::nil());
+                        }
+                        Value* old_regs = regs_ptr;
+                        regs_ptr = register_pool_.data() + active_reg_base;
+                        for (std::uint8_t i = 0; i < argc && i < new_reg_count; ++i) {
+                            regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
+                        }
+                        active_reg_count = new_reg_count;
+                        ip = 0;
+                        continue;
                     }
                 }
                 // Slow path: build args vector for call_value()
@@ -3129,24 +3138,29 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_RETURN: {
                 const Value return_value = regs_ptr[instruction.src1];
                 if (!iterative_call_stack_.empty()) {
-                    // Pop frame — skip register clearing (callee init handles it)
                     register_sp_ = active_reg_base;
-
                     auto& parent = iterative_call_stack_.back();
+                    if (parent.chunk == nullptr) {
+                        // ── Ultra-fast same-function return ──
+                        ip = parent.ip;
+                        active_reg_base = parent.reg_base;
+                        regs_ptr = register_pool_.data() + active_reg_base;
+                        regs_ptr[parent.dst] = return_value;
+                        iterative_call_stack_.pop_back();
+                        continue;
+                    }
+                    // ── Different-function return ──
                     ip = parent.ip;
                     active_reg_base = parent.reg_base;
                     active_reg_count = parent.reg_count;
                     active_call_env = parent.call_env;
                     active_module_name = parent.module_name;
                     active_module_env = parent.module_env;
-                    // Restore chunk pointers only if different function
-                    if (parent.chunk != nullptr) {
-                        active_chunk = parent.chunk;
-                        instructions_ptr = active_chunk->instructions.data();
-                        metadata_ptr = active_chunk->metadata.data();
-                        constants_ptr = active_chunk->constants.data();
-                        instructions_size = active_chunk->instructions.size();
-                    }
+                    active_chunk = parent.chunk;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
                     regs_ptr = register_pool_.data() + active_reg_base;
                     regs_ptr[parent.dst] = return_value;
                     iterative_call_stack_.pop_back();
