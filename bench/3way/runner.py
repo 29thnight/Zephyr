@@ -54,6 +54,30 @@ CASES = [
             "gravity": "scripts/array.gravity",
         },
     },
+    {
+        "name": "closure(100K)",
+        "scripts": {
+            "zephyr": "scripts/closure.zph",
+            "lua": "scripts/closure.lua",
+            "gravity": "scripts/closure.gravity",
+        },
+    },
+    {
+        "name": "struct(100K)",
+        "scripts": {
+            "zephyr": "scripts/struct.zph",
+            "lua": "scripts/struct.lua",
+            "gravity": "scripts/struct.gravity",
+        },
+    },
+    {
+        "name": "coroutine(100K)",
+        "scripts": {
+            "zephyr": "scripts/coroutine.zph",
+            "lua": "scripts/coroutine.lua",
+            "gravity": "scripts/coroutine.gravity",
+        },
+    },
 ]
 
 

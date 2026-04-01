@@ -1,0 +1,18 @@
+class Vec2 {
+    var x;
+    var y;
+    func init(a, b) {
+        x = a;
+        y = b;
+    }
+}
+
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 100000) {
+        var v = Vec2(i, i + 1);
+        total = total + v.x + v.y;
+        i = i + 1;
+    }
+}

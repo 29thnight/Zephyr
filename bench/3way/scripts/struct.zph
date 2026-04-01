@@ -1,0 +1,14 @@
+struct Vec2 {
+    x: int,
+    y: int,
+}
+
+fn main() {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 100000 {
+        let v = Vec2 { x: i, y: i + 1 };
+        total = total + v.x + v.y;
+        i = i + 1;
+    }
+}

@@ -1,0 +1,15 @@
+func make_adder(base) {
+    return func(value) {
+        return value + base;
+    };
+}
+
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 100000) {
+        var add_i = make_adder(i);
+        total = total + add_i(1);
+        i = i + 1;
+    }
+}
