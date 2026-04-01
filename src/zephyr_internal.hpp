@@ -492,4 +492,17 @@ struct FrameHeader {
     CoroutineObject* coroutine;     // non-null = coroutine frame (for R_YIELD restore)
 };
 
+// Unified execution context — all mutable frame state in one struct for fast
+// context switching (single struct copy on call/return/yield/resume).
+struct ExecutionContext {
+    const BytecodeFunction* chunk = nullptr;
+    Environment* call_env = nullptr;
+    const std::string* module_name = nullptr;
+    Environment* module_env = nullptr;
+    std::size_t reg_base = 0;
+    std::size_t reg_count = 0;
+    const std::vector<UpvalueCellObject*>* upvalues = nullptr;
+    CoroutineObject* coroutine = nullptr;
+};
+
 }  // namespace zephyr

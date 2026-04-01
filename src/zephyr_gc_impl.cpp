@@ -2374,49 +2374,59 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     Value* __restrict spill_ptr = spill_count > 0 ? regs_data + reg_count : nullptr;
 
     // ── Iterative call frame stack (Lua-style SP movement) ──────────────
-    // Phase B: use unified FrameHeader from zephyr_internal.hpp
-    std::vector<FrameHeader> iterative_call_stack_;
+    // ExecutionContext holds all mutable frame state — single struct copy on push/pop.
+    // FrameHeader is kept in zephyr_internal.hpp for compatibility but the stack
+    // now stores ExecutionContext plus the two call-site fields (ip, dst).
+    struct CallFrame : ExecutionContext {
+        std::size_t ip = 0;
+        std::size_t dst = 0;
+        CallFrame() = default;
+        CallFrame(std::size_t ip_, const ExecutionContext& ec, std::size_t dst_)
+            : ExecutionContext(ec), ip(ip_), dst(dst_) {}
+    };
+    std::vector<CallFrame> iterative_call_stack_;
     iterative_call_stack_.reserve(64);
 
-    // Mutable frame state — changes on push/pop
-    const BytecodeFunction* active_chunk = &chunk;
-    Environment* active_call_env = call_env;
-    const std::string* active_module_name = &module.name;
-    Environment* active_module_env = module.environment;
-    std::size_t active_reg_base = reg_base;
-    std::size_t active_reg_count = reg_count;
-    const std::vector<UpvalueCellObject*>* active_upvalues = captured_upvalues;
-    CoroutineObject* active_coroutine_ = nullptr;
+    // Mutable frame state — unified into ExecutionContext
+    ExecutionContext ctx;
+    ctx.chunk = &chunk;
+    ctx.call_env = call_env;
+    ctx.module_name = &module.name;
+    ctx.module_env = module.environment;
+    ctx.reg_base = reg_base;
+    ctx.reg_count = reg_count;
+    ctx.upvalues = captured_upvalues;
+    ctx.coroutine = nullptr;
 
     auto register_index = [&](std::uint8_t reg, const Span& span) -> RuntimeResult<std::size_t> {
-        if (static_cast<std::size_t>(reg) >= active_reg_count) {
-            return make_loc_error<std::size_t>(*active_module_name, span, "Invalid register access.");
+        if (static_cast<std::size_t>(reg) >= ctx.reg_count) {
+            return make_loc_error<std::size_t>(*ctx.module_name, span, "Invalid register access.");
         }
         return static_cast<std::size_t>(reg);
     };
 
     auto global_base_env = [&]() -> Environment* {
-        if (active_call_env == nullptr) {
-            return active_module_env;
+        if (ctx.call_env == nullptr) {
+            return ctx.module_env;
         }
-        return active_chunk->global_slots_use_module_root_base ? module_or_root_environment(active_call_env) : active_call_env;
+        return ctx.chunk->global_slots_use_module_root_base ? module_or_root_environment(ctx.call_env) : ctx.call_env;
     };
 
     auto resolve_global_binding = [&](int slot, const Span& span) -> RuntimeResult<std::pair<Environment*, Binding*>> {
-        if (slot < 0 || static_cast<std::size_t>(slot) >= active_chunk->global_names.size()) {
-            return make_loc_error<std::pair<Environment*, Binding*>>(*active_module_name, span, "Invalid global slot access.");
+        if (slot < 0 || static_cast<std::size_t>(slot) >= ctx.chunk->global_names.size()) {
+            return make_loc_error<std::pair<Environment*, Binding*>>(*ctx.module_name, span, "Invalid global slot access.");
         }
         Environment* env = global_base_env();
         while (env != nullptr) {
-            auto it = env->values.find(active_chunk->global_names[static_cast<std::size_t>(slot)]);
+            auto it = env->values.find(ctx.chunk->global_names[static_cast<std::size_t>(slot)]);
             if (it != env->values.end()) {
                 return std::pair<Environment*, Binding*>{env, &it->second};
             }
             env = env->parent;
         }
-        return make_loc_error<std::pair<Environment*, Binding*>>(*active_module_name,
+        return make_loc_error<std::pair<Environment*, Binding*>>(*ctx.module_name,
                                                                  span,
-                                                                 "Unknown identifier '" + active_chunk->global_names[static_cast<std::size_t>(slot)] + "'.");
+                                                                 "Unknown identifier '" + ctx.chunk->global_names[static_cast<std::size_t>(slot)] + "'.");
     };
 
     // Global binding cache — only used for the root frame (iterative frames bypass via resolve_global_binding)
@@ -2426,10 +2436,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     std::vector<std::uint64_t>   reg_global_binding_versions(r_global_count, 0);
 
     auto ensure_r_global_binding = [&](int slot) -> bool {
-        const std::size_t active_global_count = active_chunk->global_names.size();
+        const std::size_t active_global_count = ctx.chunk->global_names.size();
         if (slot < 0 || static_cast<std::size_t>(slot) >= active_global_count) return false;
         // For iterative sub-frames (different chunk), bypass root-frame cache
-        if (active_chunk != &chunk || static_cast<std::size_t>(slot) >= r_global_count) {
+        if (ctx.chunk != &chunk || static_cast<std::size_t>(slot) >= r_global_count) {
             // Direct env lookup for sub-frames — cache the result in the binding pair returned by caller
             ++global_binding_cache_misses_;
             return false;
@@ -2446,7 +2456,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         reg_global_binding_versions[s] = 0;
         Environment* env = global_base_env();
         while (env != nullptr) {
-            const auto it = env->values.find(active_chunk->global_names[s]);
+            const auto it = env->values.find(ctx.chunk->global_names[s]);
             if (it != env->values.end()) {
                 reg_global_binding_owners[s] = env;
                 reg_global_bindings[s] = &it->second;
@@ -2507,7 +2517,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_NE: token = TokenType::BangEqual; break;
             default: break;
         }
-        return apply_binary_op(token, left, right, span, *active_module_name);
+        return apply_binary_op(token, left, right, span, *ctx.module_name);
     };
 
     struct OpcodeCountCommit {
@@ -2561,23 +2571,23 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         }
 
         // Resolve globals if not yet done
-        if (!active_chunk->globals_resolved && !active_chunk->global_names.empty()) {
-            active_chunk->resolved_global_bindings.resize(active_chunk->global_names.size(), nullptr);
-            active_chunk->resolved_global_owners.resize(active_chunk->global_names.size(), nullptr);
+        if (!ctx.chunk->globals_resolved && !ctx.chunk->global_names.empty()) {
+            ctx.chunk->resolved_global_bindings.resize(ctx.chunk->global_names.size(), nullptr);
+            ctx.chunk->resolved_global_owners.resize(ctx.chunk->global_names.size(), nullptr);
             Environment* base = global_base_env();
-            for (size_t gi = 0; gi < active_chunk->global_names.size(); ++gi) {
+            for (size_t gi = 0; gi < ctx.chunk->global_names.size(); ++gi) {
                 Environment* env = base;
                 while (env != nullptr) {
-                    auto it = env->values.find(active_chunk->global_names[gi]);
+                    auto it = env->values.find(ctx.chunk->global_names[gi]);
                     if (it != env->values.end()) {
-                        active_chunk->resolved_global_bindings[gi] = &it->second;
-                        active_chunk->resolved_global_owners[gi] = env;
+                        ctx.chunk->resolved_global_bindings[gi] = &it->second;
+                        ctx.chunk->resolved_global_owners[gi] = env;
                         break;
                     }
                     env = env->parent;
                 }
             }
-            active_chunk->globals_resolved = true;
+            ctx.chunk->globals_resolved = true;
         }
 
         // Build dispatch state
@@ -2593,14 +2603,14 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         dstate.int_constant_valid = c_int_valid.data();
         dstate.constants_count = chunk.constants.size();
         dstate.globals.bindings = reinterpret_cast<void**>(
-            active_chunk->resolved_global_bindings.data());
-        dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
-        dstate.globals.count = active_chunk->global_names.size();
+            ctx.chunk->resolved_global_bindings.data());
+        dstate.globals.resolved = ctx.chunk->globals_resolved ? 1 : 0;
+        dstate.globals.count = ctx.chunk->global_names.size();
         dstate.call_stack = nullptr;
         dstate.call_stack_sp = 0;
         dstate.call_stack_capacity = 0;
-        dstate.active_chunk = active_chunk;
-        dstate.active_reg_count = active_reg_count;
+        dstate.active_chunk = ctx.chunk;
+        dstate.active_reg_count = ctx.reg_count;
         dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
         dstate.upvalue_count = c_upvalue_cells.size();
         dstate.coroutine_value = 0;
@@ -2667,38 +2677,35 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 if (co->started && co->frames.size() == 1 && co->frames[0].uses_register_mode) {
                     const CompactInstruction& ri = instructions_ptr[ip];
                     // Push caller frame
-                    iterative_call_stack_.push_back({
-                        ip + 1, active_reg_base, active_reg_count,
-                        static_cast<std::size_t>(ri.dst),
-                        active_chunk, active_call_env, active_module_name, active_module_env,
-                        active_upvalues, active_coroutine_
-                    });
+                    iterative_call_stack_.push_back(CallFrame(
+                        ip + 1, ctx, static_cast<std::size_t>(ri.dst)
+                    ));
 
                     // Swap to coroutine state
                     auto& cf = co->frames.front();
-                    active_chunk = cf.bytecode.get();
-                    active_upvalues = &cf.captured_upvalues;
-                    active_coroutine_ = co;
+                    ctx.chunk = cf.bytecode.get();
+                    ctx.upvalues = &cf.captured_upvalues;
+                    ctx.coroutine = co;
 
                     Value* co_regs = (cf.reg_count > 0 && cf.regs.empty())
                         ? cf.inline_regs : cf.regs.data();
                     regs_ptr = co_regs;
                     ip = cf.ip_index;
-                    instructions_ptr = active_chunk->instructions.data();
-                    metadata_ptr = active_chunk->metadata.data();
-                    constants_ptr = active_chunk->constants.data();
-                    instructions_size = active_chunk->instructions.size();
+                    instructions_ptr = ctx.chunk->instructions.data();
+                    metadata_ptr = ctx.chunk->metadata.data();
+                    constants_ptr = ctx.chunk->constants.data();
+                    instructions_size = ctx.chunk->instructions.size();
 
                     co->suspended = false;
                     ++co->resume_count;
 
                     // Rebuild upvalue view for C dispatch
                     c_upvalue_cells.clear();
-                    if (active_upvalues && !active_upvalues->empty()) {
-                        c_upvalue_cells.resize(active_upvalues->size());
-                        for (std::size_t ui = 0; ui < active_upvalues->size(); ++ui) {
+                    if (ctx.upvalues && !ctx.upvalues->empty()) {
+                        c_upvalue_cells.resize(ctx.upvalues->size());
+                        for (std::size_t ui = 0; ui < ctx.upvalues->size(); ++ui) {
                             c_upvalue_cells[ui] = reinterpret_cast<ZephyrVal*>(
-                                &(*active_upvalues)[ui]->value);
+                                &(*ctx.upvalues)[ui]->value);
                         }
                     }
 
@@ -2707,19 +2714,19 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     dstate.ip = ip;
                     dstate.instructions = reinterpret_cast<const ZInstruction*>(instructions_ptr);
                     dstate.instructions_size = instructions_size;
-                    dstate.active_chunk = active_chunk;
-                    dstate.active_reg_count = active_chunk->max_regs > active_chunk->local_count
-                        ? static_cast<std::size_t>(active_chunk->max_regs)
-                        : static_cast<std::size_t>(active_chunk->local_count);
+                    dstate.active_chunk = ctx.chunk;
+                    dstate.active_reg_count = ctx.chunk->max_regs > ctx.chunk->local_count
+                        ? static_cast<std::size_t>(ctx.chunk->max_regs)
+                        : static_cast<std::size_t>(ctx.chunk->local_count);
                     dstate.int_constants = nullptr;  // coroutine frame uses its own constants
                     dstate.int_constant_valid = nullptr;
-                    dstate.constants_count = active_chunk->constants.size();
+                    dstate.constants_count = ctx.chunk->constants.size();
                     dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
                     dstate.upvalue_count = c_upvalue_cells.size();
                     dstate.globals.bindings = reinterpret_cast<void**>(
-                        active_chunk->resolved_global_bindings.data());
-                    dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
-                    dstate.globals.count = active_chunk->global_names.size();
+                        ctx.chunk->resolved_global_bindings.data());
+                    dstate.globals.resolved = ctx.chunk->globals_resolved ? 1 : 0;
+                    dstate.globals.count = ctx.chunk->global_names.size();
                     dstate.deopt_reason = ZDEOPT_NONE;
 
                     c_result = zephyr_vm_dispatch(&dstate, &cbs);
@@ -2730,39 +2737,39 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             }
 
             if (c_result == ZVM_COROUTINE_YIELD) {
-                if (active_coroutine_ != nullptr && !iterative_call_stack_.empty()) {
+                if (ctx.coroutine != nullptr && !iterative_call_stack_.empty()) {
                     // Fiber-style yield: save IP, pop caller frame
                     const CompactInstruction& yi = instructions_ptr[ip];
-                    active_coroutine_->frames.front().ip_index = ip + 1;
-                    active_coroutine_->suspended = true;
-                    ++active_coroutine_->yield_count;
+                    ctx.coroutine->frames.front().ip_index = ip + 1;
+                    ctx.coroutine->suspended = true;
+                    ++ctx.coroutine->yield_count;
                     const Value yv = regs_ptr[yi.src1];
 
                     auto& parent = iterative_call_stack_.back();
                     ip = parent.ip;
-                    active_reg_base = parent.reg_base;
-                    active_reg_count = parent.reg_count;
-                    active_call_env = parent.call_env;
-                    active_module_name = parent.module_name;
-                    active_module_env = parent.module_env;
-                    active_upvalues = parent.upvalues;
-                    active_coroutine_ = parent.coroutine;
-                    active_chunk = parent.chunk;
-                    instructions_ptr = active_chunk->instructions.data();
-                    metadata_ptr = active_chunk->metadata.data();
-                    constants_ptr = active_chunk->constants.data();
-                    instructions_size = active_chunk->instructions.size();
-                    regs_ptr = register_pool_.data() + active_reg_base;
+                    ctx.reg_base = parent.reg_base;
+                    ctx.reg_count = parent.reg_count;
+                    ctx.call_env = parent.call_env;
+                    ctx.module_name = parent.module_name;
+                    ctx.module_env = parent.module_env;
+                    ctx.upvalues = parent.upvalues;
+                    ctx.coroutine = parent.coroutine;
+                    ctx.chunk = parent.chunk;
+                    instructions_ptr = ctx.chunk->instructions.data();
+                    metadata_ptr = ctx.chunk->metadata.data();
+                    constants_ptr = ctx.chunk->constants.data();
+                    instructions_size = ctx.chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = yv;
                     iterative_call_stack_.pop_back();
 
                     // Rebuild upvalue view for caller
                     c_upvalue_cells.clear();
-                    if (active_upvalues && !active_upvalues->empty()) {
-                        c_upvalue_cells.resize(active_upvalues->size());
-                        for (std::size_t ui = 0; ui < active_upvalues->size(); ++ui) {
+                    if (ctx.upvalues && !ctx.upvalues->empty()) {
+                        c_upvalue_cells.resize(ctx.upvalues->size());
+                        for (std::size_t ui = 0; ui < ctx.upvalues->size(); ++ui) {
                             c_upvalue_cells[ui] = reinterpret_cast<ZephyrVal*>(
-                                &(*active_upvalues)[ui]->value);
+                                &(*ctx.upvalues)[ui]->value);
                         }
                     }
 
@@ -2774,17 +2781,17 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     dstate.ip = ip;
                     dstate.instructions = reinterpret_cast<const ZInstruction*>(instructions_ptr);
                     dstate.instructions_size = instructions_size;
-                    dstate.active_chunk = active_chunk;
-                    dstate.active_reg_count = active_reg_count;
+                    dstate.active_chunk = ctx.chunk;
+                    dstate.active_reg_count = ctx.reg_count;
                     dstate.int_constants = nullptr;
                     dstate.int_constant_valid = nullptr;
-                    dstate.constants_count = active_chunk->constants.size();
+                    dstate.constants_count = ctx.chunk->constants.size();
                     dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
                     dstate.upvalue_count = c_upvalue_cells.size();
                     dstate.globals.bindings = reinterpret_cast<void**>(
-                        active_chunk->resolved_global_bindings.data());
-                    dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
-                    dstate.globals.count = active_chunk->global_names.size();
+                        ctx.chunk->resolved_global_bindings.data());
+                    dstate.globals.resolved = ctx.chunk->globals_resolved ? 1 : 0;
+                    dstate.globals.count = ctx.chunk->global_names.size();
                     dstate.deopt_reason = ZDEOPT_NONE;
 
                     c_result = zephyr_vm_dispatch(&dstate, &cbs);
@@ -2948,35 +2955,35 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                 const int r_gslot = unpack_r_index_operand(instruction.operand);
                 // Fast path: use per-chunk flat cache (resolved once, reused across recursive calls)
-                if (active_chunk->globals_resolved) {
-                    regs_ptr[dst] = read_binding_value(*active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                if (ctx.chunk->globals_resolved) {
+                    regs_ptr[dst] = read_binding_value(*ctx.chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
                     ++ip;
                     break;
                 }
                 // First execution: resolve all globals for this chunk and cache
                 {
-                    const std::size_t gc = active_chunk->global_names.size();
-                    active_chunk->resolved_global_bindings.resize(gc, nullptr);
-                    active_chunk->resolved_global_owners.resize(gc, nullptr);
+                    const std::size_t gc = ctx.chunk->global_names.size();
+                    ctx.chunk->resolved_global_bindings.resize(gc, nullptr);
+                    ctx.chunk->resolved_global_owners.resize(gc, nullptr);
                     Environment* base = global_base_env();
                     for (std::size_t gi = 0; gi < gc; ++gi) {
                         Environment* env = base;
                         while (env != nullptr) {
-                            auto it = env->values.find(active_chunk->global_names[gi]);
+                            auto it = env->values.find(ctx.chunk->global_names[gi]);
                             if (it != env->values.end()) {
-                                active_chunk->resolved_global_bindings[gi] = &it->second;
-                                active_chunk->resolved_global_owners[gi] = env;
+                                ctx.chunk->resolved_global_bindings[gi] = &it->second;
+                                ctx.chunk->resolved_global_owners[gi] = env;
                                 break;
                             }
                             env = env->parent;
                         }
                     }
-                    active_chunk->globals_resolved = true;
-                    if (active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)] == nullptr) {
-                        return make_loc_error<Value>(*active_module_name, span,
-                            "Unknown identifier '" + active_chunk->global_names[static_cast<std::size_t>(r_gslot)] + "'.");
+                    ctx.chunk->globals_resolved = true;
+                    if (ctx.chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)] == nullptr) {
+                        return make_loc_error<Value>(*ctx.module_name, span,
+                            "Unknown identifier '" + ctx.chunk->global_names[static_cast<std::size_t>(r_gslot)] + "'.");
                     }
-                    regs_ptr[dst] = read_binding_value(*active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                    regs_ptr[dst] = read_binding_value(*ctx.chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
                 }
                 ++ip;
                 break;
@@ -2990,7 +2997,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ZEPHYR_TRY_ASSIGN(binding_pair_sg, resolve_global_binding(r_gslot, span));
                     // Populate cache slots so code below can use them
                     const std::size_t sg_s = static_cast<std::size_t>(r_gslot);
-                    if (active_chunk == &chunk && sg_s < r_global_count) {
+                    if (ctx.chunk == &chunk && sg_s < r_global_count) {
                         reg_global_binding_owners[sg_s] = binding_pair_sg.first;
                         reg_global_bindings[sg_s] = binding_pair_sg.second;
                         reg_global_binding_versions[sg_s] = binding_pair_sg.first->version;
@@ -3210,28 +3217,28 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 break;
             }
             case BytecodeOp::R_YIELD: {
-                if (active_coroutine_ != nullptr && !iterative_call_stack_.empty()) {
+                if (ctx.coroutine != nullptr && !iterative_call_stack_.empty()) {
                     // Fiber-style yield: save IP, pop caller frame
-                    active_coroutine_->frames.front().ip_index = ip + 1;
-                    active_coroutine_->suspended = true;
-                    ++active_coroutine_->yield_count;
+                    ctx.coroutine->frames.front().ip_index = ip + 1;
+                    ctx.coroutine->suspended = true;
+                    ++ctx.coroutine->yield_count;
                     const Value yv = regs_ptr[instruction.src1];
 
                     auto& parent = iterative_call_stack_.back();
                     ip = parent.ip;
-                    active_reg_base = parent.reg_base;
-                    active_reg_count = parent.reg_count;
-                    active_call_env = parent.call_env;
-                    active_module_name = parent.module_name;
-                    active_module_env = parent.module_env;
-                    active_upvalues = parent.upvalues;
-                    active_coroutine_ = parent.coroutine;
-                    active_chunk = parent.chunk;
-                    instructions_ptr = active_chunk->instructions.data();
-                    metadata_ptr = active_chunk->metadata.data();
-                    constants_ptr = active_chunk->constants.data();
-                    instructions_size = active_chunk->instructions.size();
-                    regs_ptr = register_pool_.data() + active_reg_base;
+                    ctx.reg_base = parent.reg_base;
+                    ctx.reg_count = parent.reg_count;
+                    ctx.call_env = parent.call_env;
+                    ctx.module_name = parent.module_name;
+                    ctx.module_env = parent.module_env;
+                    ctx.upvalues = parent.upvalues;
+                    ctx.coroutine = parent.coroutine;
+                    ctx.chunk = parent.chunk;
+                    instructions_ptr = ctx.chunk->instructions.data();
+                    metadata_ptr = ctx.chunk->metadata.data();
+                    constants_ptr = ctx.chunk->constants.data();
+                    instructions_size = ctx.chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = yv;
                     iterative_call_stack_.pop_back();
                     continue;
@@ -3250,21 +3257,23 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 if (callee_val.is_object() && callee_val.as_object()->kind == ObjectKind::ScriptFunction) {
                     auto* function = static_cast<ScriptFunctionObject*>(callee_val.as_object());
                     if (function->bytecode != nullptr && function->bytecode->uses_register_mode) {
-                        if (function->bytecode.get() == active_chunk) {
+                        if (function->bytecode.get() == ctx.chunk) {
                             // ── Ultra-fast same-function recursion ──
                             // Skip: chunk save/restore, instructions_ptr update, reg_count recompute,
                             //       call_env/module_env save (all identical for same function)
-                            iterative_call_stack_.push_back({
-                                ip + 1, active_reg_base, active_reg_count, dst,
-                                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
-                            });
-                            active_reg_base = register_sp_;
-                            register_sp_ += active_reg_count;  // same reg count
+                            {
+                                ExecutionContext saved_ctx{};
+                                saved_ctx.reg_base = ctx.reg_base;
+                                saved_ctx.reg_count = ctx.reg_count;
+                                iterative_call_stack_.push_back(CallFrame(ip + 1, saved_ctx, dst));
+                            }
+                            ctx.reg_base = register_sp_;
+                            register_sp_ += ctx.reg_count;  // same reg count
                             if (register_sp_ > register_pool_.size()) {
                                 register_pool_.resize(register_sp_ * 2, Value::nil());
                             }
                             Value* old_regs = regs_ptr;
-                            regs_ptr = register_pool_.data() + active_reg_base;
+                            regs_ptr = register_pool_.data() + ctx.reg_base;
                             for (std::uint8_t i = 0; i < argc; ++i) {
                                 regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
                             }
@@ -3272,34 +3281,30 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                             continue;
                         }
                         // ── Different-function call ──
-                        iterative_call_stack_.push_back({
-                            ip + 1, active_reg_base, active_reg_count, dst,
-                            active_chunk, active_call_env, active_module_name, active_module_env,
-                            active_upvalues, active_coroutine_
-                        });
-                        active_chunk = function->bytecode.get();
-                        active_call_env = function->closure;
-                        active_upvalues = &function->captured_upvalues;
-                        active_module_env = function->closure;
-                        instructions_ptr = active_chunk->instructions.data();
-                        metadata_ptr = active_chunk->metadata.data();
-                        constants_ptr = active_chunk->constants.data();
-                        instructions_size = active_chunk->instructions.size();
+                        iterative_call_stack_.push_back(CallFrame(ip + 1, ctx, dst));
+                        ctx.chunk = function->bytecode.get();
+                        ctx.call_env = function->closure;
+                        ctx.upvalues = &function->captured_upvalues;
+                        ctx.module_env = function->closure;
+                        instructions_ptr = ctx.chunk->instructions.data();
+                        metadata_ptr = ctx.chunk->metadata.data();
+                        constants_ptr = ctx.chunk->constants.data();
+                        instructions_size = ctx.chunk->instructions.size();
 
-                        const int mr = active_chunk->max_regs;
-                        const int lc = active_chunk->local_count;
+                        const int mr = ctx.chunk->max_regs;
+                        const int lc = ctx.chunk->local_count;
                         const std::size_t new_reg_count = static_cast<std::size_t>(mr > lc ? mr : lc);
-                        active_reg_base = register_sp_;
+                        ctx.reg_base = register_sp_;
                         register_sp_ += new_reg_count;
                         if (register_sp_ > register_pool_.size()) {
                             register_pool_.resize(register_sp_ * 2, Value::nil());
                         }
                         Value* old_regs = regs_ptr;
-                        regs_ptr = register_pool_.data() + active_reg_base;
+                        regs_ptr = register_pool_.data() + ctx.reg_base;
                         for (std::uint8_t i = 0; i < argc && i < new_reg_count; ++i) {
                             regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
                         }
-                        active_reg_count = new_reg_count;
+                        ctx.reg_count = new_reg_count;
                         ip = 0;
                         continue;
                     }
@@ -3312,7 +3317,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ZEPHYR_TRY_ASSIGN(arg_reg, register_index(static_cast<std::uint8_t>(args_start + index), span));
                     args.push_back(regs_ptr[arg_reg]);
                 }
-                ZEPHYR_TRY_ASSIGN(result, call_value(regs_ptr[callee], args, span, *active_module_name));
+                ZEPHYR_TRY_ASSIGN(result, call_value(regs_ptr[callee], args, span, *ctx.module_name));
                 regs_ptr[dst] = result;
                 ++ip;
                 break;
@@ -3463,10 +3468,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_LOAD_UPVALUE: {
                 const std::uint8_t uv_dst = unpack_r_dst_operand(instruction.operand);
                 const int uv_slot = unpack_r_index_operand(instruction.operand);
-                if (active_upvalues != nullptr &&
-                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
-                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
-                    regs_ptr[uv_dst] = (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value;
+                if (ctx.upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < ctx.upvalues->size() &&
+                    (*ctx.upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    regs_ptr[uv_dst] = (*ctx.upvalues)[static_cast<std::size_t>(uv_slot)]->value;
                 } else {
                     regs_ptr[uv_dst] = Value::nil();
                 }
@@ -3475,10 +3480,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_STORE_UPVALUE: {
                 const std::uint8_t uv_src = unpack_r_src_operand(instruction.operand);
                 const int uv_slot = unpack_r_index_operand(instruction.operand);
-                if (active_upvalues != nullptr &&
-                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
-                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
-                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
+                if (ctx.upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < ctx.upvalues->size() &&
+                    (*ctx.upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    (*ctx.upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
                 }
                 ++ip; break;
             }
@@ -3505,7 +3510,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     meta.bytecode->closure_params_cached = true;
                 }
 
-                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                Environment* closure_env = select_closure_environment(ctx.call_env, meta.bytecode);
                 auto* func_obj = allocate<ScriptFunctionObject>(
                     ScriptFunctionObject::ClosureTag{},
                     closure_env, span, meta.bytecode);
@@ -3528,7 +3533,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 const Value& target_rv = regs_ptr[instruction.src1];
                 if (!target_rv.is_object() || target_rv.as_object()->kind != ObjectKind::Coroutine) {
                     const Span span = instruction_span(instruction);
-                    return make_loc_error<Value>(*active_module_name, span, "resume expects a coroutine value.");
+                    return make_loc_error<Value>(*ctx.module_name, span, "resume expects a coroutine value.");
                 }
                 auto* co = static_cast<CoroutineObject*>(target_rv.as_object());
                 if (co->completed) {
@@ -3538,27 +3543,24 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 // Fiber-style fast path: started, single-frame, register-mode
                 if (co->started && co->frames.size() == 1 && co->frames[0].uses_register_mode) {
                     // Push caller frame (same pattern as R_CALL)
-                    iterative_call_stack_.push_back({
-                        ip + 1, active_reg_base, active_reg_count,
-                        static_cast<std::size_t>(instruction.dst),
-                        active_chunk, active_call_env, active_module_name, active_module_env,
-                        active_upvalues, active_coroutine_
-                    });
+                    iterative_call_stack_.push_back(CallFrame(
+                        ip + 1, ctx, static_cast<std::size_t>(instruction.dst)
+                    ));
 
                     // Swap to coroutine state — Gravity-style pointer exchange
                     auto& cf = co->frames.front();
-                    active_chunk = cf.bytecode.get();
-                    active_upvalues = &cf.captured_upvalues;
-                    active_coroutine_ = co;
+                    ctx.chunk = cf.bytecode.get();
+                    ctx.upvalues = &cf.captured_upvalues;
+                    ctx.coroutine = co;
 
                     Value* co_regs = (cf.reg_count > 0 && cf.regs.empty())
                         ? cf.inline_regs : cf.regs.data();
                     regs_ptr = co_regs;
                     ip = cf.ip_index;
-                    instructions_ptr = active_chunk->instructions.data();
-                    metadata_ptr = active_chunk->metadata.data();
-                    constants_ptr = active_chunk->constants.data();
-                    instructions_size = active_chunk->instructions.size();
+                    instructions_ptr = ctx.chunk->instructions.data();
+                    metadata_ptr = ctx.chunk->metadata.data();
+                    constants_ptr = ctx.chunk->constants.data();
+                    instructions_size = ctx.chunk->instructions.size();
 
                     co->suspended = false;
                     ++co->resume_count;
@@ -3567,7 +3569,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 // Slow path: first resume, multi-frame, or non-register-mode
                 {
                     const Span span = instruction_span(instruction);
-                    ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target_rv, span, *active_module_name));
+                    ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target_rv, span, *ctx.module_name));
                     regs_ptr[instruction.dst] = result;
                 }
                 ++ip; break;
@@ -3596,7 +3598,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 }
 
                 if (!meta.bytecode->cached_closure_params.empty()) {
-                    return make_loc_error<Value>(*active_module_name, span,
+                    return make_loc_error<Value>(*ctx.module_name, span,
                                                  "coroutine fn expressions do not support parameters yet.");
                 }
 
@@ -3604,9 +3606,9 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ? std::optional<std::string>(*meta.type_name)
                     : std::nullopt;
 
-                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                Environment* closure_env = select_closure_environment(ctx.call_env, meta.bytecode);
                 auto* coroutine = allocate<CoroutineObject>(
-                    *active_module_name,
+                    *ctx.module_name,
                     closure_env,
                     meta.bytecode,
                     return_type_str);
@@ -3652,37 +3654,37 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_RETURN: {
                 const Value return_value = regs_ptr[instruction.src1];
                 if (!iterative_call_stack_.empty()) {
-                    register_sp_ = active_reg_base;
+                    register_sp_ = ctx.reg_base;
                     auto& parent = iterative_call_stack_.back();
                     if (parent.chunk == nullptr) {
                         // ── Ultra-fast same-function return ──
                         ip = parent.ip;
-                        active_reg_base = parent.reg_base;
-                        regs_ptr = register_pool_.data() + active_reg_base;
+                        ctx.reg_base = parent.reg_base;
+                        regs_ptr = register_pool_.data() + ctx.reg_base;
                         regs_ptr[parent.dst] = return_value;
                         iterative_call_stack_.pop_back();
                         continue;
                     }
                     // ── Different-function return ──
                     // If returning from a coroutine frame, mark it completed
-                    if (parent.coroutine != nullptr && active_coroutine_ != nullptr) {
-                        active_coroutine_->completed = true;
-                        active_coroutine_->suspended = false;
+                    if (parent.coroutine != nullptr && ctx.coroutine != nullptr) {
+                        ctx.coroutine->completed = true;
+                        ctx.coroutine->suspended = false;
                     }
                     ip = parent.ip;
-                    active_reg_base = parent.reg_base;
-                    active_reg_count = parent.reg_count;
-                    active_call_env = parent.call_env;
-                    active_module_name = parent.module_name;
-                    active_module_env = parent.module_env;
-                    active_upvalues = parent.upvalues;
-                    active_coroutine_ = parent.coroutine;
-                    active_chunk = parent.chunk;
-                    instructions_ptr = active_chunk->instructions.data();
-                    metadata_ptr = active_chunk->metadata.data();
-                    constants_ptr = active_chunk->constants.data();
-                    instructions_size = active_chunk->instructions.size();
-                    regs_ptr = register_pool_.data() + active_reg_base;
+                    ctx.reg_base = parent.reg_base;
+                    ctx.reg_count = parent.reg_count;
+                    ctx.call_env = parent.call_env;
+                    ctx.module_name = parent.module_name;
+                    ctx.module_env = parent.module_env;
+                    ctx.upvalues = parent.upvalues;
+                    ctx.coroutine = parent.coroutine;
+                    ctx.chunk = parent.chunk;
+                    instructions_ptr = ctx.chunk->instructions.data();
+                    metadata_ptr = ctx.chunk->metadata.data();
+                    constants_ptr = ctx.chunk->constants.data();
+                    instructions_size = ctx.chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = return_value;
                     iterative_call_stack_.pop_back();
                     continue;
