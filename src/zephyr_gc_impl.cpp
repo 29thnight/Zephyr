@@ -3295,15 +3295,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
 
                 Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
                 auto* func_obj = allocate<ScriptFunctionObject>(
-                    meta.string_operand.empty() ? "<anonymous>" : meta.string_operand,
-                    *active_module_name,
-                    meta.bytecode->cached_closure_params,
-                    meta.bytecode->cached_closure_return_type,
-                    nullptr,
-                    closure_env,
-                    span,
-                    meta.bytecode,
-                    std::vector<std::string>{});
+                    ScriptFunctionObject::ClosureTag{},
+                    closure_env, span, meta.bytecode);
 
                 // Create upvalue cells directly from parent registers — no Environment walk
                 if (!meta.jump_table.empty()) {

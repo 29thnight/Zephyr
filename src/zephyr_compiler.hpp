@@ -812,6 +812,18 @@ struct ScriptFunctionObject final : GcObject {
           generic_params(std::move(generic_params)),
           where_clauses(std::move(where_clauses)) {}
 
+    // Lightweight constructor for R_MAKE_FUNCTION hot path — minimal copies
+    struct ClosureTag {};
+    ScriptFunctionObject(ClosureTag, Environment* closure_env, Span span,
+                         std::shared_ptr<BytecodeFunction> bc)
+        : GcObject(ObjectKind::ScriptFunction),
+          closure(closure_env),
+          definition_span(span),
+          bytecode(std::move(bc)) {
+        // name/module_name/params left empty — populated lazily from bytecode if needed for errors
+        // This avoids string copies and vector copies on the hot closure-creation path
+    }
+
     void trace(class Runtime& runtime) override;
 
     std::string name;
