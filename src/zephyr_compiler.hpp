@@ -3621,6 +3621,8 @@ private:
     std::size_t local_binding_cache_misses_ = 0;
     std::size_t global_binding_cache_hits_ = 0;
     std::size_t global_binding_cache_misses_ = 0;
+    std::size_t ic_hits_ = 0;
+    std::size_t ic_misses_ = 0;
     std::size_t callback_invocations_ = 0;
     std::size_t serialized_value_exports_ = 0;
     std::size_t deserialized_value_imports_ = 0;

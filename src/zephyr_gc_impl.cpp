@@ -2091,17 +2091,20 @@ RuntimeResult<Value> Runtime::load_member_value(const Value& object,
         auto* instance = static_cast<StructInstanceObject*>(object.as_object());
         if (instance->shape != nullptr && instruction.ic_shape == instance->shape &&
             instruction.ic_slot < instance->field_values.size()) {
+            ++ic_hits_;
             return instance->field_values[instruction.ic_slot];
         }
 
         if (instance->shape != nullptr) {
             const auto it = instance->shape->field_indices.find(metadata.string_operand);
             if (it != instance->shape->field_indices.end() && it->second < instance->field_values.size()) {
+                ++ic_misses_;
                 instruction.ic_shape = instance->shape;
                 instruction.ic_slot = it->second;
                 return instance->field_values[it->second];
             }
         }
+        ++ic_misses_;
     }
 
     return get_member_value(object, metadata.string_operand, span, module_name);
@@ -2183,10 +2186,12 @@ RuntimeResult<Value> Runtime::store_member_value(const Value& object,
         std::size_t slot = static_cast<std::size_t>(-1);
         if (instance->shape != nullptr && instruction.ic_shape == instance->shape &&
             instruction.ic_slot < instance->field_values.size()) {
+            ++ic_hits_;
             slot = instruction.ic_slot;
         } else if (instance->shape != nullptr) {
             const auto it = instance->shape->field_indices.find(metadata.string_operand);
             if (it != instance->shape->field_indices.end() && it->second < instance->field_values.size()) {
+                ++ic_misses_;
                 instruction.ic_shape = instance->shape;
                 instruction.ic_slot = it->second;
                 slot = it->second;
@@ -3330,11 +3335,13 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
                     const ZephyrHostClass::Getter* lm_getter = nullptr;
                     if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                        ++ic_hits_;
                         lm_getter = lm_class->get_getter_at(instruction.ic_slot);
                     } else {
                         std::uint32_t lm_idx = 0;
                         lm_getter = lm_class->find_getter_ic(metadata_ptr[ip].string_operand, lm_idx);
                         if (lm_getter != nullptr) {
+                            ++ic_misses_;
                             instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
                             instruction.ic_slot = lm_idx;
                         }
@@ -3367,11 +3374,13 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
                     const ZephyrHostClass::Method* cm_method = nullptr;
                     if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                        ++ic_hits_;
                         cm_method = cm_class->get_method_at(instruction.ic_slot);
                     } else {
                         std::uint32_t cm_idx = 0;
                         cm_method = cm_class->find_method_ic(metadata_ptr[ip].string_operand, cm_idx);
                         if (cm_method != nullptr) {
+                            ++ic_misses_;
                             instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
                             instruction.ic_slot = cm_idx;
                         }
@@ -5983,11 +5992,13 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                 const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
                 const ZephyrHostClass::Getter* lm_getter = nullptr;
                 if (instr.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                    ++ic_hits_;
                     lm_getter = lm_class->get_getter_at(instr.ic_slot);
                 } else {
                     std::uint32_t lm_idx = 0;
                     lm_getter = lm_class->find_getter_ic(metadata_ptr[local_ip].string_operand, lm_idx);
                     if (lm_getter != nullptr) {
+                        ++ic_misses_;
                         instr.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
                         instr.ic_slot = lm_idx;
                     }
@@ -6020,11 +6031,13 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                 const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
                 const ZephyrHostClass::Method* cm_method = nullptr;
                 if (instr.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                    ++ic_hits_;
                     cm_method = cm_class->get_method_at(instr.ic_slot);
                 } else {
                     std::uint32_t cm_idx = 0;
                     cm_method = cm_class->find_method_ic(metadata_ptr[local_ip].string_operand, cm_idx);
                     if (cm_method != nullptr) {
+                        ++ic_misses_;
                         instr.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
                         instr.ic_slot = cm_idx;
                     }
@@ -7085,11 +7098,13 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                         const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
                         const ZephyrHostClass::Getter* lm_getter = nullptr;
                         if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                            ++ic_hits_;
                             lm_getter = lm_class->get_getter_at(instruction.ic_slot);
                         } else {
                             std::uint32_t lm_idx = 0;
                             lm_getter = lm_class->find_getter_ic(metadata.string_operand, lm_idx);
                             if (lm_getter != nullptr) {
+                                ++ic_misses_;
                                 instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
                                 instruction.ic_slot = lm_idx;
                             }
@@ -7125,11 +7140,13 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                         const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
                         const ZephyrHostClass::Method* cm_method = nullptr;
                         if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                            ++ic_hits_;
                             cm_method = cm_class->get_method_at(instruction.ic_slot);
                         } else {
                             std::uint32_t cm_idx = 0;
                             cm_method = cm_class->find_method_ic(metadata.string_operand, cm_idx);
                             if (cm_method != nullptr) {
+                                ++ic_misses_;
                                 instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
                                 instruction.ic_slot = cm_idx;
                             }
@@ -13090,6 +13107,8 @@ ZephyrVM::RuntimeStats Runtime::runtime_stats() const {
     stats.vm.local_binding_cache_misses = local_binding_cache_misses_;
     stats.vm.global_binding_cache_hits = global_binding_cache_hits_;
     stats.vm.global_binding_cache_misses = global_binding_cache_misses_;
+    stats.vm.ic_hits = ic_hits_;
+    stats.vm.ic_misses = ic_misses_;
     stats.vm.callback_count = retained_callbacks_.size();
     stats.vm.callback_invocations = callback_invocations_;
     stats.vm.serialized_value_exports = serialized_value_exports_;

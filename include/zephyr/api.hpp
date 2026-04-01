@@ -427,6 +427,8 @@ struct ZephyrVmStats {
     std::size_t serialized_value_exports = 0;
     std::size_t deserialized_value_imports = 0;
     std::size_t total_original_opcode_count = 0;
+    std::size_t ic_hits = 0;
+    std::size_t ic_misses = 0;
 };
 
 struct ZephyrCoroutineStats {

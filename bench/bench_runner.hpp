@@ -42,6 +42,8 @@ struct BenchmarkCaseSummary {
     double mean_local_binding_cache_misses = 0.0;
     double mean_global_binding_cache_hits = 0.0;
     double mean_global_binding_cache_misses = 0.0;
+    double mean_ic_hits = 0.0;
+    double mean_ic_misses = 0.0;
     std::string last_result;
     ZephyrRuntimeStats last_stats{};
 };

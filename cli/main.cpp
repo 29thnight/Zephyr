@@ -82,6 +82,8 @@ std::string runtime_stats_json(const zephyr::ZephyrRuntimeStats& stats, const ze
         << "    \"local_binding_cache_misses\": " << stats.vm.local_binding_cache_misses << ",\n"
         << "    \"global_binding_cache_hits\": " << stats.vm.global_binding_cache_hits << ",\n"
         << "    \"global_binding_cache_misses\": " << stats.vm.global_binding_cache_misses << ",\n"
+        << "    \"ic_hits\": " << stats.vm.ic_hits << ",\n"
+        << "    \"ic_misses\": " << stats.vm.ic_misses << ",\n"
         << "    \"callback_invocations\": " << stats.vm.callback_invocations << ",\n"
         << "    \"serialized_value_exports\": " << stats.vm.serialized_value_exports << ",\n"
         << "    \"deserialized_value_imports\": " << stats.vm.deserialized_value_imports << ",\n"

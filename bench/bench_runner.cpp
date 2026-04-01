@@ -170,6 +170,10 @@ BenchmarkCaseSummary summarize_case(const BenchmarkCaseDefinition& definition,
         mean_stat(measurements, [](const ZephyrRuntimeStats& stats) { return stats.vm.global_binding_cache_hits; });
     summary.mean_global_binding_cache_misses =
         mean_stat(measurements, [](const ZephyrRuntimeStats& stats) { return stats.vm.global_binding_cache_misses; });
+    summary.mean_ic_hits =
+        mean_stat(measurements, [](const ZephyrRuntimeStats& stats) { return stats.vm.ic_hits; });
+    summary.mean_ic_misses =
+        mean_stat(measurements, [](const ZephyrRuntimeStats& stats) { return stats.vm.ic_misses; });
     return summary;
 }
 
@@ -652,6 +656,8 @@ std::string stats_to_json(const ZephyrRuntimeStats& stats, int indent) {
     out << pad2 << "  \"local_binding_cache_misses\": " << stats.vm.local_binding_cache_misses << ",\n";
     out << pad2 << "  \"global_binding_cache_hits\": " << stats.vm.global_binding_cache_hits << ",\n";
     out << pad2 << "  \"global_binding_cache_misses\": " << stats.vm.global_binding_cache_misses << ",\n";
+    out << pad2 << "  \"ic_hits\": " << stats.vm.ic_hits << ",\n";
+    out << pad2 << "  \"ic_misses\": " << stats.vm.ic_misses << ",\n";
     out << pad2 << "  \"callback_invocations\": " << stats.vm.callback_invocations << ",\n";
     out << pad2 << "  \"serialized_value_exports\": " << stats.vm.serialized_value_exports << ",\n";
     out << pad2 << "  \"deserialized_value_imports\": " << stats.vm.deserialized_value_imports << ",\n";
@@ -776,6 +782,8 @@ std::string to_json(const BenchmarkReport& report) {
         out << "      \"mean_local_binding_cache_misses\": " << entry.mean_local_binding_cache_misses << ",\n";
         out << "      \"mean_global_binding_cache_hits\": " << entry.mean_global_binding_cache_hits << ",\n";
         out << "      \"mean_global_binding_cache_misses\": " << entry.mean_global_binding_cache_misses << ",\n";
+        out << "      \"mean_ic_hits\": " << entry.mean_ic_hits << ",\n";
+        out << "      \"mean_ic_misses\": " << entry.mean_ic_misses << ",\n";
         out << "      \"last_result\": \"" << json_escape(entry.last_result) << "\",\n";
         out << "      \"last_stats\": " << stats_to_json(entry.last_stats, 6) << "\n";
         out << "    }";
