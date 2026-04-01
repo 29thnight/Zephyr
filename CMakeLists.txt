@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Zephyr LANGUAGES CXX)
+project(Zephyr LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ add_library(ZephyrRuntime STATIC
     src/zephyr.cpp
     src/zephyr_parser.cpp
     src/zephyr_gc_impl.cpp
+    src/zephyr_vm_dispatch.c
 )
 
 target_include_directories(ZephyrRuntime

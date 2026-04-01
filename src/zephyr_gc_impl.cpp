@@ -1,6 +1,7 @@
 // zephyr_gc_impl.cpp — Generational GC: nursery/old-gen allocation, tracing,
 // mark-and-sweep, card table, write barrier, and coroutine frame compaction.
 #include "zephyr_internal.hpp"
+#include "zephyr_vm_dispatch.h"
 
 namespace zephyr {
 
@@ -2515,6 +2516,112 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     const InstructionMetadata* metadata_ptr = chunk.metadata.data();
     const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
     std::size_t instructions_size = chunk.instructions.size();
+
+    // ── C Dispatch Fast Path (computed goto) ────────────────────────
+    // Try C dispatch for pure register-mode functions. Falls back to C++ for cold opcodes.
+    static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
+                  "CompactInstruction and ZInstruction must have identical layout.");
+    {
+        // Extract int constants
+        std::vector<int64_t> c_int_constants(chunk.constants.size());
+        std::vector<int> c_int_valid(chunk.constants.size(), 0);
+        for (size_t ci = 0; ci < chunk.constants.size(); ++ci) {
+            if (const auto* iv = std::get_if<std::int64_t>(&chunk.constants[ci])) {
+                c_int_constants[ci] = *iv;
+                c_int_valid[ci] = 1;
+            }
+        }
+
+        // Resolve globals if not yet done
+        if (!active_chunk->globals_resolved && !active_chunk->global_names.empty()) {
+            active_chunk->resolved_global_bindings.resize(active_chunk->global_names.size(), nullptr);
+            active_chunk->resolved_global_owners.resize(active_chunk->global_names.size(), nullptr);
+            Environment* base = global_base_env();
+            for (size_t gi = 0; gi < active_chunk->global_names.size(); ++gi) {
+                Environment* env = base;
+                while (env != nullptr) {
+                    auto it = env->values.find(active_chunk->global_names[gi]);
+                    if (it != env->values.end()) {
+                        active_chunk->resolved_global_bindings[gi] = &it->second;
+                        active_chunk->resolved_global_owners[gi] = env;
+                        break;
+                    }
+                    env = env->parent;
+                }
+            }
+            active_chunk->globals_resolved = true;
+        }
+
+        // Build dispatch state
+        ZDispatchState dstate = {};
+        dstate.regs = reinterpret_cast<ZephyrVal*>(regs_data);
+        dstate.reg_pool = reinterpret_cast<ZephyrVal*>(register_pool_.data());
+        dstate.reg_pool_capacity = register_pool_.size();
+        dstate.register_sp = register_sp_;
+        dstate.ip = 0;
+        dstate.instructions = reinterpret_cast<const ZInstruction*>(chunk.instructions.data());
+        dstate.instructions_size = chunk.instructions.size();
+        dstate.int_constants = c_int_constants.data();
+        dstate.int_constant_valid = c_int_valid.data();
+        dstate.constants_count = chunk.constants.size();
+        dstate.globals.bindings = reinterpret_cast<void**>(
+            active_chunk->resolved_global_bindings.data());
+        dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
+        dstate.globals.count = active_chunk->global_names.size();
+        dstate.call_stack = nullptr;
+        dstate.call_stack_sp = 0;
+        dstate.call_stack_capacity = 0;
+        dstate.active_chunk = active_chunk;
+        dstate.active_reg_count = active_reg_count;
+
+        // Allocate call stack for C dispatch
+        std::vector<ZCallFrame> c_call_stack(64);
+        dstate.call_stack = c_call_stack.data();
+        dstate.call_stack_capacity = c_call_stack.size();
+
+        // Set up callbacks — must be non-capturing for C function pointer compatibility
+        // read_global: read Value bits from Binding* via resolved_global_bindings
+        struct CDispatchHelpers {
+            static ZephyrVal read_global(void* /*runtime*/, ZDispatchState* s, int slot) {
+                auto* bindings = reinterpret_cast<Binding**>(s->globals.bindings);
+                if (bindings && bindings[slot]) {
+                    // Binding::value is the first field (type Value, 8 bytes = uint64_t bits_)
+                    ZephyrVal val;
+                    std::memcpy(&val, &bindings[slot]->value, sizeof(ZephyrVal));
+                    return val;
+                }
+                return ZV_NIL_TAG;
+            }
+
+            static int slow_opcode(ZDispatchState* /*s*/, void* /*runtime*/, size_t /*opcode_ip*/) {
+                return ZVM_SLOW_OPCODE;
+            }
+        };
+
+        ZCallbacks cbs = {};
+        cbs.slow_opcode = CDispatchHelpers::slow_opcode;
+        cbs.read_global = CDispatchHelpers::read_global;
+        cbs.call_handler = nullptr;
+        cbs.runtime = this;
+
+        int c_result = zephyr_vm_dispatch(&dstate, &cbs);
+
+        // Sync state back
+        register_sp_ = dstate.register_sp;
+
+        if (c_result == ZVM_RETURN) {
+            // Convert the raw bits back to Value
+            Value ret_val;
+            std::memcpy(&ret_val, &dstate.return_value, sizeof(Value));
+            return ret_val;
+        }
+
+        // ZVM_SLOW_OPCODE or ZVM_ERROR: fall through to C++ loop
+        ip = dstate.ip;
+        regs_ptr = reinterpret_cast<Value*>(dstate.regs);
+        // Continue with existing C++ dispatch loop below
+    }
+
     for (;;) {
         const CompactInstruction& instruction = instructions_ptr[ip];
 
