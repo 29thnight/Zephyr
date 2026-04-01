@@ -120,6 +120,7 @@ enum class BytecodeOp {
     R_LOAD_INDEX,    // dst=reg, src1=obj_reg, src2=index_reg
     R_LOAD_UPVALUE,  // dst=reg, operand=upvalue_slot_index; regs[dst] = captured_upvalues[slot]->value
     R_STORE_UPVALUE, // src=reg, operand=upvalue_slot_index; captured_upvalues[slot]->value = regs[src]
+    R_MAKE_FUNCTION, // dst=reg; metadata.bytecode=inner_func, metadata.names=param_info, metadata.string_operand=func_name, metadata.type_name=return_type, metadata.jump_table=captured_reg_indices
 };
 
 struct BytecodeFunction;
@@ -763,6 +764,7 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_LOAD_INDEX: return "R_LOAD_INDEX";
         case BytecodeOp::R_LOAD_UPVALUE: return "R_LOAD_UPVALUE";
         case BytecodeOp::R_STORE_UPVALUE: return "R_STORE_UPVALUE";
+        case BytecodeOp::R_MAKE_FUNCTION: return "R_MAKE_FUNCTION";
     }
     return "Unknown";
 }
@@ -3784,6 +3786,9 @@ inline int recompute_register_max(const BytecodeFunction& function) {
                 note_reg(instruction.src1);
                 note_reg(instruction.src2);
                 break;
+            case BytecodeOp::R_MAKE_FUNCTION:
+                note_reg(instruction.dst);
+                break;
             default:
                 break;
         }
@@ -5786,6 +5791,58 @@ private:
             emit_r_load_index(index_expr->span, dst, *obj_reg, *idx_reg);
             register_allocator_.free_temp(*obj_reg);
             register_allocator_.free_temp(*idx_reg);
+            return dst;
+        }
+
+        if (auto* func_expr = dynamic_cast<FunctionExpr*>(expr)) {
+            // Compile the inner function body using a child BytecodeCompiler.
+            // The child's resolve_upvalue_slot will walk into this (parent) compiler
+            // to find captured locals, populating inner_bytecode->upvalue_names.
+            BytecodeCompiler child(this);
+            auto inner_bytecode = child.compile(
+                "<anonymous>", func_expr->params, func_expr->body.get(), false);
+
+            // Build the register-index mapping for each upvalue the inner function captures.
+            // inner_bytecode->upvalue_names lists the variable names the child needs;
+            // we resolve each to a local register slot in the current (parent) scope.
+            std::vector<std::int32_t> captured_reg_indices;
+            for (const auto& uv_name : inner_bytecode->upvalue_names) {
+                if (const auto slot = resolve_local_slot(uv_name); slot.has_value()) {
+                    captured_reg_indices.push_back(static_cast<std::int32_t>(*slot));
+                } else if (const auto parent_uv = find_upvalue_slot(uv_name); parent_uv.has_value()) {
+                    // The captured variable is itself an upvalue of the current function.
+                    // We can't resolve it to a register — fall back to stack mode.
+                    fail_register_compile();
+                    return std::nullopt;
+                } else {
+                    fail_register_compile();
+                    return std::nullopt;
+                }
+            }
+
+            // Emit R_MAKE_FUNCTION
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r(BytecodeOp::R_MAKE_FUNCTION, func_expr->span, dst, 0);
+            // Populate metadata on the just-emitted instruction
+            auto& meta = function_->metadata.back();
+            meta.bytecode = inner_bytecode;
+            meta.string_operand = "<anonymous>";
+            // Encode parameter names and types as interleaved pairs: [name, type, name, type, ...]
+            meta.names.clear();
+            for (const auto& p : func_expr->params) {
+                meta.names.push_back(p.name);
+                if (p.type.has_value()) {
+                    meta.names.push_back(p.type->display_name());
+                } else {
+                    meta.names.push_back("");
+                }
+            }
+            if (func_expr->return_type.has_value()) {
+                meta.type_name = func_expr->return_type->display_name();
+            }
+            // Store captured register indices so the interpreter can create
+            // UpvalueCells directly from register values (Approach B — no Environment walk).
+            meta.jump_table = std::move(captured_reg_indices);
             return dst;
         }
 

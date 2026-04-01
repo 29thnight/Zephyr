@@ -3268,6 +3268,65 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 }
                 ++ip; break;
             }
+            case BytecodeOp::R_MAKE_FUNCTION: {
+                const Span span = instruction_span(instruction);
+                const InstructionMetadata& meta = metadata_ptr[ip];
+
+                // Build params from metadata (interleaved name/type pairs)
+                std::vector<Param> func_params;
+                for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
+                    Param p;
+                    p.name = meta.names[i];
+                    p.span = span;
+                    if (!meta.names[i + 1].empty()) {
+                        p.type = TypeRef{{meta.names[i + 1]}, span};
+                    }
+                    func_params.push_back(std::move(p));
+                }
+
+                std::optional<TypeRef> ret_type;
+                if (meta.type_name.has_value() && !meta.type_name->empty()) {
+                    ret_type = TypeRef{{*meta.type_name}, span};
+                }
+
+                // Allocate the ScriptFunctionObject directly instead of going through
+                // create_script_function.  create_script_function calls capture_upvalue_cells
+                // which walks the Environment chain — but in register mode the captured
+                // locals live in registers, not in any Environment.  We create upvalue cells
+                // from registers below (Approach B).
+                const std::string func_name = meta.string_operand.empty() ? "<anonymous>" : meta.string_operand;
+                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                auto* func_obj = allocate<ScriptFunctionObject>(
+                    func_name,
+                    *active_module_name,
+                    func_params,
+                    ret_type,
+                    nullptr,       // no AST body in register mode
+                    closure_env,
+                    span,
+                    meta.bytecode,
+                    std::vector<std::string>{});
+
+                // Create upvalue cells directly from parent registers (Approach B).
+                // This bypasses capture_upvalue_cells entirely — no Environment walk,
+                // no hash map lookup.  The jump_table stores the parent register index
+                // for each upvalue, in the same order as inner_bytecode->upvalue_names.
+                if (!meta.jump_table.empty()) {
+                    std::vector<UpvalueCellObject*> cells;
+                    cells.reserve(meta.jump_table.size());
+                    for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
+                        const int reg_idx = meta.jump_table[i];
+                        auto* cell = allocate<UpvalueCellObject>(
+                            regs_ptr[reg_idx], true, std::nullopt,
+                            HandleContainerKind::ClosureCapture);
+                        cells.push_back(cell);
+                    }
+                    func_obj->captured_upvalues = std::move(cells);
+                }
+
+                regs_ptr[instruction.dst] = Value::object(func_obj);
+                ++ip; break;
+            }
             case BytecodeOp::R_RETURN: {
                 const Value return_value = regs_ptr[instruction.src1];
                 if (!iterative_call_stack_.empty()) {
@@ -13211,6 +13270,7 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_SI_MODI_ADD_STORE:
             case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
             case BytecodeOp::R_SI_LOOP_STEP:
+            case BytecodeOp::R_MAKE_FUNCTION:
                 return true;
             default:
                 return false;
@@ -13406,6 +13466,19 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                             << " step=" << static_cast<int>(static_cast<std::int8_t>(instruction.src1))
                             << " limit=" << unpack_r_si_ls_limit(instruction.ic_slot)
                             << " body=" << unpack_r_si_ls_body(instruction.ic_slot);
+                        break;
+                    case BytecodeOp::R_MAKE_FUNCTION:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " name=" << metadata.string_operand
+                            << " captures=" << metadata.jump_table.size();
+                        if (metadata.bytecode) {
+                            out << " upvalues=[";
+                            for (std::size_t ui = 0; ui < metadata.jump_table.size(); ++ui) {
+                                if (ui > 0) out << ",";
+                                out << "r" << metadata.jump_table[ui];
+                            }
+                            out << "]";
+                        }
                         break;
                     default:
                         break;
