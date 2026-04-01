@@ -1,7 +1,5 @@
 # 함수와 클로저 (Functions and Closures)
 
-# 함수와 클로저 (Functions and Closures)
-
 함수는 로직을 캡슐화하는 핵심 단위입니다. Zephyr에서 함수는 **일급 객체(First-class citizens)**로 취급되므로, 변수에 할당하거나 다른 함수의 인자로 전달할 수 있습니다.
 
 ## 함수 선언 (`fn`)
@@ -119,24 +117,6 @@ fn repeat(n: int, f: fn(int) -> void) -> void {
 repeat(3, fn(i: int) -> void {
     print(f"step {i}");
 });
-```
-
----
-
-## 연관 함수 (Static Methods)
-
-`impl` 블록 내부에서 `self` 파라미터 없이 선언된 함수는 `타입명::함수명` 형태로 호출합니다.
-
-```zephyr
-struct Vec2 { x: float, y: float }
-
-impl Vec2 {
-    fn zero() -> Vec2 {
-        return Vec2 { x: 0.0, y: 0.0 };
-    }
-}
-
-let origin = Vec2::zero();
 ```
 
 ---
