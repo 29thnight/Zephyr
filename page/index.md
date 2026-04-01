@@ -3,6 +3,21 @@ layout: page
 sidebar: false
 ---
 
+<script setup>
+import { onMounted } from 'vue'
+import { useRouter, useData } from 'vitepress'
+
+const { lang } = useData()
+const router = useRouter()
+
+onMounted(() => {
+  // If we are at the exact root base path, redirect to en-us
+  if (window.location.pathname === '/Zephyr/' || window.location.pathname === '/Zephyr') {
+    router.go('/Zephyr/en-us/')
+  }
+})
+</script>
+
 <AntigravityBg
   :count="300"
   :magnetRadius="14"
@@ -24,7 +39,7 @@ sidebar: false
   locale="en"
   tagline="Ultra-fast Script Runtime for Game Engines"
   primaryText="Read the Docs"
-  primaryLink="/introduction/overview"
+  primaryLink="/en-us/introduction/overview"
   secondaryText="View on GitHub"
   secondaryLink="https://github.com/29thnight/Zephyr"
 />

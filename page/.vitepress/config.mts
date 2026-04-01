@@ -11,6 +11,10 @@ export default defineConfig({
     search: {
       provider: 'local'
     },
+    nav: [
+      { text: 'Documentation', link: '/en-us/introduction/overview' },
+      { text: 'Github', link: 'https://github.com/29thnight/Zephyr' }
+    ],
     // Social links removed as requested (Github icon removal)
     socialLinks: []
   },

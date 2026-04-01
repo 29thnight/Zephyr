@@ -190,7 +190,6 @@
 /* ── HIDE unused elements ── */
 .VPNavBarSocialLinks,
 .VPNavBarAppearance,
-.VPNavScreenMenu,
 .VPNavScreenTranslations,
 .extra,
 .social-links,
@@ -200,6 +199,16 @@
   height: 0 !important;
   margin: 0 !important;
   padding: 0 !important;
+}
+
+/* ── COMPATIBILITY: Ensure navbar content doesn't overlap sidebar ── */
+.VPNavBar.has-sidebar .container > .content {
+  padding-left: 32px !important; /* Minimal buffer for sidebar */
+}
+@media (max-width: 960px) {
+  .VPNavBar.has-sidebar .container > .content {
+    padding-left: 0 !important;
+  }
 }
 
 /* ── Nav link styling ── */
