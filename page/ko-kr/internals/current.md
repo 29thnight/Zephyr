@@ -52,12 +52,29 @@ editors/vscode-zephyr/   VS Code 플러그인 확장 기능
 
 ## VM 아키텍처 지원부
 
-- Register 단위 바이트코드 (스택 구조 아님) + 단축 명령어 융합(SI_ADD_STORE 등 지원)
+- Register 단위 바이트코드 (스택 구조 아님) + 슈퍼인스트럭션 융합
 - 256개 이상의 로컬 변수 포용 처리 (Spill fallback - `R_SPILL_LOAD / STORE`)
 - 가상 레지스터 최적 할당기: Live Range 분석과 Copy propagation을 통한 낭비 최소화
 - 2단계 시멘틱 분석 검증기: 상위 단위 Hoisting 처리 및 트레이트 규격 만족 심리
 - 빠른 해싱을 위한 불변 문자열의 글로벌 관리 (String interning / GC root 고정)
 - 모듈 바이트코드 바이너리 전처리 캐싱 (`.zphc` - 마지막 수정 시간 검사 방식)
+
+### 슈퍼인스트럭션 목록
+
+| Opcode | 설명 |
+|---|---|
+| `R_SI_ADD/SUB/MUL_STORE` | 연산 + 목적지 이동 |
+| `R_SI_CMP_JUMP_FALSE` | 비교 + 조건부 점프 |
+| `R_SI_CMPI_JUMP_FALSE` | 즉시값 비교 + 조건부 점프 |
+| `R_ADDI_JUMP` | 증가 + 무조건 점프 |
+| `R_SI_ADDI_CMPI_LT_JUMP` | 증가 + 상한 비교 + 조건부 점프 (루프 back-edge) |
+| `R_SI_MODI_ADD_STORE` | `dst = accum + (src % imm)` |
+| `R_SI_LOOP_STEP` | 루프 한 스텝 전체: `accum += iter%div; iter += step; if iter < limit goto body` |
+
+### 인라인 캐시 (IC)
+
+- **R_BUILD_STRUCT IC**: 첫 번째 실행 후 `StructTypeObject*`를 캐시. 이후 호출은 타입 탐색·문자열 비교 없이 객체를 직접 할당합니다.
+- **StructTypeObject::cached_shape**: Shape 계산(벡터 할당 + 해시맵 조회)을 첫 번째 인스턴스 생성 시 1회로 제한합니다.
 
 ## GC (가비지 컬렉터)
 
@@ -75,12 +92,11 @@ editors/vscode-zephyr/   VS Code 플러그인 확장 기능
 
 ## 최신 벤치마크 결과 (5/5 게이트 승인)
 
-다음 테스트는 Lua 5.4 기반인 이전 `lua_baseline`과 직접 대비하여 **1ms 미만의 실행 지연 예산**을 목표로 측정되었습니다:
-
-| 항목 (Case) | 평균 소요 | `lua_baseline` 비교 및 비고 |
-|---|---|---|
-| module_import | 838 µs | 단순 명령어 구조 분석 |
-| hot_arithmetic_loop | 1.13 ms | 순수 대수 연산 예산 내 측정 |
-| array_object_churn | 4.31 ms | 메모리 부족 현상 없이 순수 할당만 벤치마크 (0 Full GC) |
-| host_handle_entity | 1.92 ms | 1단계 조회의 641ns 지연 비용 포함 |
-| coroutine_yield_resume | 238 µs | 재개 당 593ns 소모 시간 존재 유의점 |
+| 항목 (Case) | 평균 소요 | Lua 5.5 | 비율 | 비고 |
+|---|---|---|---|---|
+| module_import | 838 µs | — | — | 단순 명령어 구조 |
+| hot_arithmetic_loop | ~420 µs | 394 µs | 1.07× | R_SI_LOOP_STEP (1 op/iter) |
+| array_object_churn | ~1,050 µs | 1,909 µs | **0.55×** ✓ | R_BUILD_STRUCT IC |
+| host_handle_entity | ~224 µs | 303 µs | **0.74×** ✓ | — |
+| coroutine_yield_resume | ~220 µs | 923 µs | **0.24×** ✓ | — |
+| serialization_export | 26.5 µs | — | — | — |

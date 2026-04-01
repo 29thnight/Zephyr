@@ -64,7 +64,8 @@ export default defineConfig({
               { text: 'Embedding ZephyrVM', link: '/en-us/advanced/embedding' },
               { text: 'C++ Class Bindings', link: '/en-us/advanced/bindings' },
               { text: 'Host Handle Policy', link: '/en-us/advanced/host-handles' },
-              { text: 'Garbage Collection', link: '/en-us/advanced/garbage-collection' }
+              { text: 'Garbage Collection', link: '/en-us/advanced/garbage-collection' },
+              { text: 'VM Optimization', link: '/en-us/advanced/vm-optimization' }
             ]
           },
           {
@@ -130,7 +131,8 @@ export default defineConfig({
               { text: 'ZephyrVM 내장', link: '/ko-kr/advanced/embedding' },
               { text: 'C++ 클래스 바인딩', link: '/ko-kr/advanced/bindings' },
               { text: '호스트 핸들 정책', link: '/ko-kr/advanced/host-handles' },
-              { text: '가비지 컬렉터', link: '/ko-kr/advanced/garbage-collection' }
+              { text: '가비지 컬렉터', link: '/ko-kr/advanced/garbage-collection' },
+              { text: 'VM 최적화', link: '/ko-kr/advanced/vm-optimization' }
             ]
           },
           {

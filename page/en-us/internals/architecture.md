@@ -42,7 +42,43 @@ The compiler walks the resolved AST and emits IR instructions with virtual (unli
 4. Registers that cannot fit into 0–255 emit `R_SPILL_STORE` / `R_SPILL_LOAD` pairs
 
 ### 2.7 Superinstruction Fusion
-After register allocation, a peephole pass collapses common instruction pairs into fused opcodes.
+
+After register allocation, a peephole pass in `optimize_register_bytecode()` iterates `while(changed)`, detecting adjacent and non-adjacent (loop back-edge) patterns and collapsing them into fused opcodes.
+
+#### Adjacent Patterns
+
+| Pattern | Fused Opcode | Description |
+|---|---|---|
+| `R_ADD/SUB/MUL` + `R_MOVE(dst, result)` | `R_SI_ADD/SUB/MUL_STORE` | Arithmetic + destination move |
+| `R_MODI(tmp,src,imm)` + `R_MOVE(dst,tmp)` | `R_MODI(dst,src,imm)` | Eliminate temporary register |
+| `R_ADDI(dst,src,imm)` + `R_JUMP(target)` | `R_ADDI_JUMP` | Increment + unconditional branch |
+| `R_CMP*` + `R_JUMP_IF_FALSE` | `R_SI_CMP_JUMP_FALSE` | Compare + conditional branch |
+| `R_LOAD_INT(tmp,imm)` + `R_SI_CMP_JUMP_FALSE` | `R_SI_CMPI_JUMP_FALSE` | Immediate compare + conditional branch |
+| `R_MODI(tmp,src,imm)` + `R_SI_ADD_STORE(dst,acc,tmp)` | `R_SI_MODI_ADD_STORE` | `dst = acc + (src % imm)` |
+
+#### Non-Adjacent Loop Patterns
+
+| Pattern | Fused Opcode | Description |
+|---|---|---|
+| `R_ADDI_JUMP(reg,+N)` → target: `R_SI_CMPI_JUMP_FALSE(reg,limit)` | `R_SI_ADDI_CMPI_LT_JUMP` | Loop increment + bound check |
+| `R_SI_MODI_ADD_STORE(acc,acc,iter,div)` + `R_SI_ADDI_CMPI_LT_JUMP(iter,step,limit)` | `R_SI_LOOP_STEP` | Entire loop step as 1 opcode |
+
+#### R_SI_LOOP_STEP Encoding
+
+```
+accum += iter % div
+iter  += step
+if iter < limit then goto body_start
+```
+
+| Field | Role |
+|---|---|
+| `dst` (uint8) | Accumulator register |
+| `src1` (uint8, reinterpreted as int8) | Loop step |
+| `src2` (uint8) | Loop counter register (iter) |
+| `operand_a` (uint8) | Modulo divisor (div, 1–255) |
+| `ic_slot[15:0]` (uint16) | Loop body start address |
+| `ic_slot[31:16]` (int16) | Loop upper bound (limit) |
 
 ## 3. Runtime Virtual Machine
 
@@ -53,10 +89,42 @@ The interpreter loop is a `switch`-dispatched decode-execute cycle over the curr
 - Base register offset into the value stack
 - Pointer to the enclosing closure's upvalue array
 
-### 3.2 Register Spill Fallback
+### 3.2 Instruction Set
+
+All opcodes are prefixed `R_`:
+
+| Opcode | Description |
+|---|---|
+| `R_LOAD_CONST` / `R_LOAD_INT` | Load constant or immediate integer |
+| `R_MOVE` | Copy register to register |
+| `R_ADD/SUB/MUL/DIV` | Arithmetic |
+| `R_ADDI/MODI` | Arithmetic with immediate operand |
+| `R_CMP_EQ/LT/LE` | Comparison → bool register |
+| `R_JUMP/R_JUMP_IF_FALSE` | Unconditional / conditional branch |
+| `R_CALL` / `R_RETURN` | Function call / return |
+| `R_YIELD` / `R_RESUME` | Coroutine suspend / resume |
+| `R_GET_FIELD/R_SET_FIELD` | Struct field access |
+| `R_BUILD_STRUCT` | Allocate and initialise struct literal |
+| `R_SPILL_LOAD/R_SPILL_STORE` | Heap spill for >256 locals |
+| `R_SI_ADD/SUB/MUL_STORE` | Fused arithmetic + store |
+| `R_SI_CMP_JUMP_FALSE` | Fused compare + branch |
+| `R_SI_CMPI_JUMP_FALSE` | Fused immediate compare + branch |
+| `R_ADDI_JUMP` | Fused increment + branch |
+| `R_SI_ADDI_CMPI_LT_JUMP` | Fused increment + bound check + branch |
+| `R_SI_MODI_ADD_STORE` | Fused `dst = acc + (src % imm)` |
+| `R_SI_LOOP_STEP` | Full counted loop step |
+
+#### Inline Cache (IC)
+
+`CompactInstruction` carries `mutable ic_shape` and `mutable ic_slot` cache fields.
+
+- **R_BUILD_STRUCT IC**: Caches `StructTypeObject*` after first execution, bypassing type lookup, string parsing, and field validation on subsequent calls.
+- **StructTypeObject::cached_shape**: Shape computation (vector alloc + hashmap lookup) runs once per struct type, then is reused directly.
+
+### 3.3 Register Spill Fallback
 When a function uses more than 256 local variables, the compiler emits spill opcodes. The spill area is a `GcArray` attached to the call frame. Format version bumped to v2 when spills are present.
 
-### 3.3 Coroutine Model
+### 3.4 Coroutine Model
 Each coroutine is a heap-resident `CoroutineFrame` containing:
 - Full register bank snapshot
 - Operand stack snapshot
@@ -65,7 +133,7 @@ Each coroutine is a heap-resident `CoroutineFrame` containing:
 
 On yield, `compact_suspended_coroutine()` shrinks the frame's buffer capacity to only what's needed.
 
-### 3.4 Module Bytecode Caching
+### 3.5 Module Bytecode Caching
 Compiled `.zph` modules are cached to `.zphc` files alongside the source. The cache stores the source mtime; on next load the mtime is compared and the cache is used or invalidated.
 
 ## 4. Value System and Type Hierarchy
@@ -124,12 +192,12 @@ Module search order:
 
 Benchmark suite runs 5 acceptance gates with baseline comparison against **`lua_baseline`** ensuring we maintain Lua 5.4-level execution speed or better.
 
-Latest internal results vs `lua_baseline` (2026-03-30):
+Latest results (2026-04-01):
 
-| Case | Mean | Gate (`lua_baseline` threshold) |
-|---|---|---|
-| module_import | 838 µs | ✅ |
-| hot_arithmetic_loop | 1.13 ms | ✅ |
-| array_object_churn | 4.31 ms | ✅ |
-| host_handle_entity | 1.92 ms | ✅ |
-| coroutine_yield_resume | 238 µs | ✅ |
+| Case | Mean | Lua 5.5 | Ratio | Gate |
+|---|---|---|---|---|
+| module_import | 838 µs | — | — | ✅ |
+| hot_arithmetic_loop | ~420 µs | 394 µs | 1.07× | ✅ |
+| array_object_churn | ~1,050 µs | 1,909 µs | **0.55×** | ✅ |
+| host_handle_entity | ~224 µs | 303 µs | **0.74×** | ✅ |
+| coroutine_yield_resume | ~220 µs | 923 µs | **0.24×** | ✅ |
