@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(Zephyr LANGUAGES CXX)
+project(Zephyr LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -13,11 +13,16 @@ option(ZEPHYR_BUILD_SAMPLES "Build sample executables"       ON)
 option(ZEPHYR_ENABLE_PGO    "Enable PGO instrumentation (MSVC /GL+/LTCG)" OFF)
 
 # ─── ZephyrRuntime (static library) ──────────────────────────────────────────
-add_library(ZephyrRuntime STATIC
+set(ZEPHYR_RUNTIME_SOURCES
     src/zephyr.cpp
     src/zephyr_parser.cpp
     src/zephyr_gc_impl.cpp
 )
+# zephyr_vm_dispatch.c uses computed goto (GCC/Clang extension), not supported by MSVC
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    list(APPEND ZEPHYR_RUNTIME_SOURCES src/zephyr_vm_dispatch.c)
+endif()
+add_library(ZephyrRuntime STATIC ${ZEPHYR_RUNTIME_SOURCES})
 
 target_include_directories(ZephyrRuntime
     PUBLIC  include
@@ -51,9 +56,10 @@ if(ZEPHYR_BUILD_CLI)
         cli/main.cpp
         cli/lsp_server.cpp
         cli/dap_server.cpp
+        bench/bench_runner.cpp
     )
     target_link_libraries(zephyr_cli PRIVATE ZephyrRuntime)
-    target_include_directories(zephyr_cli PRIVATE include)
+    target_include_directories(zephyr_cli PRIVATE include bench)
     if(MSVC)
         target_compile_options(zephyr_cli PRIVATE /W3 /permissive- /bigobj
             $<$<CONFIG:Release>:/O2 /GL>)
@@ -75,7 +81,7 @@ if(ZEPHYR_BUILD_TESTS)
         tests/test_corpus.cpp
     )
     target_link_libraries(zephyr_tests PRIVATE ZephyrRuntime)
-    target_include_directories(zephyr_tests PRIVATE include tests)
+    target_include_directories(zephyr_tests PRIVATE include tests bench)
     if(MSVC)
         target_compile_options(zephyr_tests PRIVATE /W3 /permissive- /bigobj
             $<$<CONFIG:Release>:/O2>)

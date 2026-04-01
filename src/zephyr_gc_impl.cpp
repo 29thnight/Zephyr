@@ -1,6 +1,7 @@
 // zephyr_gc_impl.cpp — Generational GC: nursery/old-gen allocation, tracing,
 // mark-and-sweep, card table, write barrier, and coroutine frame compaction.
 #include "zephyr_internal.hpp"
+#include "zephyr_vm_dispatch.h"
 
 namespace zephyr {
 
@@ -259,6 +260,10 @@ Runtime::Runtime(ZephyrVMConfig config) : config_(std::move(config)) {
     // Phase 3B: root_environment_ is a permanent root — allocate directly into PinnedSpace.
     // promote_object() is no longer needed (allocate_pinned sets GcPinnedBit|GcOldBit).
     root_environment_ = allocate_pinned<Environment>(nullptr, EnvironmentKind::Root);
+
+    // Pre-allocate register pool for execute_register_bytecode (avoids per-call heap alloc)
+    register_pool_.resize(8192, Value::nil());
+    rooted_value_vectors_.push_back(&register_pool_);
 }
 
 Runtime::~Runtime() {
@@ -2327,62 +2332,105 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                                                         const std::vector<UpvalueCellObject*>* captured_upvalues,
                                                         const std::vector<Value>* call_args) {
     (void)params;
-    (void)captured_upvalues;
     ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(&chunk, call_span, module.name, "Register bytecode chunk"));
 
     const std::size_t reg_count = static_cast<std::size_t>(std::max({chunk.max_regs, chunk.local_count, 0}));
-    std::vector<Value> regs(reg_count, Value::nil());
+    const std::size_t spill_count = static_cast<std::size_t>(std::max(chunk.spill_count, 0));
+
+    // Use pre-allocated register pool to avoid heap allocation on recursive calls.
+    const std::size_t reg_base = register_sp_;
+    const std::size_t total_needed = reg_count + spill_count;
+    register_sp_ += total_needed;
+    if (register_sp_ > register_pool_.size()) {
+        register_pool_.resize(register_sp_ * 2, Value::nil());
+    }
+    Value* regs_data = register_pool_.data() + reg_base;
+    std::fill_n(regs_data, total_needed, Value::nil());
     if (call_args != nullptr) {
-        for (std::size_t index = 0; index < call_args->size() && index < regs.size(); ++index) {
-            regs[index] = (*call_args)[index];
+        for (std::size_t index = 0; index < call_args->size() && index < reg_count; ++index) {
+            regs_data[index] = (*call_args)[index];
         }
     }
+    // Restore register_sp_ on exit (RAII guard)
+    struct RegPoolGuard {
+        std::size_t& sp; std::size_t saved; Value* base; std::size_t count;
+        ~RegPoolGuard() { std::fill_n(base, count, Value::nil()); sp = saved; }
+    } reg_guard{register_sp_, reg_base, regs_data, total_needed};
 
-    ScopedVectorItem<const std::vector<Value>*> regs_root(rooted_value_vectors_, &regs);
+    Value* __restrict spill_ptr = spill_count > 0 ? regs_data + reg_count : nullptr;
 
-    std::vector<Value> spill(static_cast<std::size_t>(std::max(chunk.spill_count, 0)), Value::nil());
-    ScopedVectorItem<const std::vector<Value>*> spill_root(rooted_value_vectors_, &spill);
-    Value* __restrict spill_ptr = spill.empty() ? nullptr : spill.data();
+    // ── Iterative call frame stack (Lua-style SP movement) ──────────────
+    struct RegCallFrame {
+        std::size_t ip;
+        std::size_t reg_base;
+        std::size_t reg_count;
+        std::size_t dst;
+        const BytecodeFunction* chunk;  // null = same function (skip pointer restore)
+        Environment* call_env;
+        const std::string* module_name;
+        Environment* module_env;
+        const std::vector<UpvalueCellObject*>* upvalues;
+        CoroutineObject* coroutine;     // non-null = coroutine frame (for R_YIELD restore)
+    };
+    std::vector<RegCallFrame> iterative_call_stack_;
+    iterative_call_stack_.reserve(64);
+
+    // Mutable frame state — changes on push/pop
+    const BytecodeFunction* active_chunk = &chunk;
+    Environment* active_call_env = call_env;
+    const std::string* active_module_name = &module.name;
+    Environment* active_module_env = module.environment;
+    std::size_t active_reg_base = reg_base;
+    std::size_t active_reg_count = reg_count;
+    const std::vector<UpvalueCellObject*>* active_upvalues = captured_upvalues;
+    CoroutineObject* active_coroutine_ = nullptr;
 
     auto register_index = [&](std::uint8_t reg, const Span& span) -> RuntimeResult<std::size_t> {
-        if (static_cast<std::size_t>(reg) >= regs.size()) {
-            return make_loc_error<std::size_t>(module.name, span, "Invalid register access.");
+        if (static_cast<std::size_t>(reg) >= active_reg_count) {
+            return make_loc_error<std::size_t>(*active_module_name, span, "Invalid register access.");
         }
         return static_cast<std::size_t>(reg);
     };
 
     auto global_base_env = [&]() -> Environment* {
-        if (call_env == nullptr) {
-            return module.environment;
+        if (active_call_env == nullptr) {
+            return active_module_env;
         }
-        return chunk.global_slots_use_module_root_base ? module_or_root_environment(call_env) : call_env;
+        return active_chunk->global_slots_use_module_root_base ? module_or_root_environment(active_call_env) : active_call_env;
     };
 
     auto resolve_global_binding = [&](int slot, const Span& span) -> RuntimeResult<std::pair<Environment*, Binding*>> {
-        if (slot < 0 || static_cast<std::size_t>(slot) >= chunk.global_names.size()) {
-            return make_loc_error<std::pair<Environment*, Binding*>>(module.name, span, "Invalid global slot access.");
+        if (slot < 0 || static_cast<std::size_t>(slot) >= active_chunk->global_names.size()) {
+            return make_loc_error<std::pair<Environment*, Binding*>>(*active_module_name, span, "Invalid global slot access.");
         }
         Environment* env = global_base_env();
         while (env != nullptr) {
-            auto it = env->values.find(chunk.global_names[static_cast<std::size_t>(slot)]);
+            auto it = env->values.find(active_chunk->global_names[static_cast<std::size_t>(slot)]);
             if (it != env->values.end()) {
                 return std::pair<Environment*, Binding*>{env, &it->second};
             }
             env = env->parent;
         }
-        return make_loc_error<std::pair<Environment*, Binding*>>(module.name,
+        return make_loc_error<std::pair<Environment*, Binding*>>(*active_module_name,
                                                                  span,
-                                                                 "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(slot)] + "'.");
+                                                                 "Unknown identifier '" + active_chunk->global_names[static_cast<std::size_t>(slot)] + "'.");
     };
 
-    // Global binding cache — avoids repeated env-chain + unordered_map lookups per R_LOAD/STORE_GLOBAL
+    // Global binding cache — only used for the root frame (iterative frames bypass via resolve_global_binding)
     const std::size_t r_global_count = chunk.global_names.size();
     std::vector<Environment*>    reg_global_binding_owners(r_global_count, nullptr);
     std::vector<Binding*>        reg_global_bindings(r_global_count, nullptr);
     std::vector<std::uint64_t>   reg_global_binding_versions(r_global_count, 0);
 
     auto ensure_r_global_binding = [&](int slot) -> bool {
-        if (slot < 0 || static_cast<std::size_t>(slot) >= r_global_count) return false;
+        const std::size_t active_global_count = active_chunk->global_names.size();
+        if (slot < 0 || static_cast<std::size_t>(slot) >= active_global_count) return false;
+        // For iterative sub-frames (different chunk), bypass root-frame cache
+        if (active_chunk != &chunk || static_cast<std::size_t>(slot) >= r_global_count) {
+            // Direct env lookup for sub-frames — cache the result in the binding pair returned by caller
+            ++global_binding_cache_misses_;
+            return false;
+        }
         const std::size_t s = static_cast<std::size_t>(slot);
         if (reg_global_bindings[s] != nullptr && reg_global_binding_owners[s] != nullptr &&
             reg_global_binding_versions[s] == reg_global_binding_owners[s]->version) {
@@ -2395,7 +2443,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         reg_global_binding_versions[s] = 0;
         Environment* env = global_base_env();
         while (env != nullptr) {
-            const auto it = env->values.find(chunk.global_names[s]);
+            const auto it = env->values.find(active_chunk->global_names[s]);
             if (it != env->values.end()) {
                 reg_global_binding_owners[s] = env;
                 reg_global_bindings[s] = &it->second;
@@ -2456,7 +2504,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_NE: token = TokenType::BangEqual; break;
             default: break;
         }
-        return apply_binary_op(token, left, right, span, module.name);
+        return apply_binary_op(token, left, right, span, *active_module_name);
     };
 
     struct OpcodeCountCommit {
@@ -2466,20 +2514,129 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     } opcode_count_commit{opcode_execution_count_};
 
     std::size_t ip = 0;
-    // Cache hot vector data pointers — keeps them in registers, avoids indirection per dispatch.
-    // Register/constant indices are validated by the bytecode compiler; direct access is safe for
-    // trusted (in-process compiled) bytecode.
-    Value* __restrict regs_ptr = regs.data();
+    Value* __restrict regs_ptr = regs_data;
     const CompactInstruction* __restrict instructions_ptr = chunk.instructions.data();
-    const InstructionMetadata* const metadata_ptr = chunk.metadata.data();
+    const InstructionMetadata* metadata_ptr = chunk.metadata.data();
     const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
-    const std::size_t instructions_size = chunk.instructions.size();
-    while (ip < instructions_size) {
-        if (gc_stress_enabled_) {
-            maybe_run_gc_stress_safe_point();
+    std::size_t instructions_size = chunk.instructions.size();
+
+    // ── C Dispatch Fast Path (computed goto) ────────────────────────
+    // Try C dispatch for pure register-mode functions. Falls back to C++ for cold opcodes.
+    // Skip for functions with upvalues (C dispatch doesn't support R_LOAD_UPVALUE yet).
+    static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
+                  "CompactInstruction and ZInstruction must have identical layout.");
+    static_assert(static_cast<int>(BytecodeOp::R_ADD) == ZOP_R_ADD);
+    static_assert(static_cast<int>(BytecodeOp::R_RETURN) == ZOP_R_RETURN);
+    static_assert(static_cast<int>(BytecodeOp::R_CALL) == ZOP_R_CALL);
+    static_assert(static_cast<int>(BytecodeOp::R_LOAD_GLOBAL) == ZOP_R_LOAD_GLOBAL);
+    static_assert(static_cast<int>(BytecodeOp::R_LOAD_UPVALUE) == ZOP_R_LOAD_UPVALUE);
+    static_assert(static_cast<int>(BytecodeOp::R_MAKE_FUNCTION) == ZOP_R_MAKE_FUNCTION);
+    static_assert(static_cast<int>(BytecodeOp::R_RESUME) == ZOP_R_RESUME);
+    // Skip C dispatch for functions with upvalues OR R_MAKE_FUNCTION (not yet in C dispatch table).
+    // These fall back to call_value which misses the iterative frame stack.
+    if (captured_upvalues == nullptr || captured_upvalues->empty()) {
+        // Extract int constants
+        std::vector<int64_t> c_int_constants(chunk.constants.size());
+        std::vector<int> c_int_valid(chunk.constants.size(), 0);
+        for (size_t ci = 0; ci < chunk.constants.size(); ++ci) {
+            if (const auto* iv = std::get_if<std::int64_t>(&chunk.constants[ci])) {
+                c_int_constants[ci] = *iv;
+                c_int_valid[ci] = 1;
+            }
         }
+
+        // Resolve globals if not yet done
+        if (!active_chunk->globals_resolved && !active_chunk->global_names.empty()) {
+            active_chunk->resolved_global_bindings.resize(active_chunk->global_names.size(), nullptr);
+            active_chunk->resolved_global_owners.resize(active_chunk->global_names.size(), nullptr);
+            Environment* base = global_base_env();
+            for (size_t gi = 0; gi < active_chunk->global_names.size(); ++gi) {
+                Environment* env = base;
+                while (env != nullptr) {
+                    auto it = env->values.find(active_chunk->global_names[gi]);
+                    if (it != env->values.end()) {
+                        active_chunk->resolved_global_bindings[gi] = &it->second;
+                        active_chunk->resolved_global_owners[gi] = env;
+                        break;
+                    }
+                    env = env->parent;
+                }
+            }
+            active_chunk->globals_resolved = true;
+        }
+
+        // Build dispatch state
+        ZDispatchState dstate = {};
+        dstate.regs = reinterpret_cast<ZephyrVal*>(regs_data);
+        dstate.reg_pool = reinterpret_cast<ZephyrVal*>(register_pool_.data());
+        dstate.reg_pool_capacity = register_pool_.size();
+        dstate.register_sp = register_sp_;
+        dstate.ip = 0;
+        dstate.instructions = reinterpret_cast<const ZInstruction*>(chunk.instructions.data());
+        dstate.instructions_size = chunk.instructions.size();
+        dstate.int_constants = c_int_constants.data();
+        dstate.int_constant_valid = c_int_valid.data();
+        dstate.constants_count = chunk.constants.size();
+        dstate.globals.bindings = reinterpret_cast<void**>(
+            active_chunk->resolved_global_bindings.data());
+        dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
+        dstate.globals.count = active_chunk->global_names.size();
+        dstate.call_stack = nullptr;
+        dstate.call_stack_sp = 0;
+        dstate.call_stack_capacity = 0;
+        dstate.active_chunk = active_chunk;
+        dstate.active_reg_count = active_reg_count;
+
+        // Allocate call stack for C dispatch
+        std::vector<ZCallFrame> c_call_stack(64);
+        dstate.call_stack = c_call_stack.data();
+        dstate.call_stack_capacity = c_call_stack.size();
+
+        // Set up callbacks — must be non-capturing for C function pointer compatibility
+        // read_global: read Value bits from Binding* via resolved_global_bindings
+        struct CDispatchHelpers {
+            static ZephyrVal read_global(void* /*runtime*/, ZDispatchState* s, int slot) {
+                auto* bindings = reinterpret_cast<Binding**>(s->globals.bindings);
+                if (bindings && bindings[slot]) {
+                    // Binding::value is the first field (type Value, 8 bytes = uint64_t bits_)
+                    ZephyrVal val;
+                    std::memcpy(&val, &bindings[slot]->value, sizeof(ZephyrVal));
+                    return val;
+                }
+                return ZV_NIL_TAG;
+            }
+
+            static int slow_opcode(ZDispatchState* /*s*/, void* /*runtime*/, size_t /*opcode_ip*/) {
+                return ZVM_SLOW_OPCODE;
+            }
+        };
+
+        ZCallbacks cbs = {};
+        cbs.slow_opcode = CDispatchHelpers::slow_opcode;
+        cbs.read_global = CDispatchHelpers::read_global;
+        cbs.call_handler = nullptr;
+        cbs.runtime = this;
+
+        int c_result = zephyr_vm_dispatch(&dstate, &cbs);
+
+        // Sync state back
+        register_sp_ = dstate.register_sp;
+
+        if (c_result == ZVM_RETURN) {
+            // Convert the raw bits back to Value
+            Value ret_val;
+            std::memcpy(&ret_val, &dstate.return_value, sizeof(Value));
+            return ret_val;
+        }
+
+        // ZVM_SLOW_OPCODE or ZVM_ERROR: fall through to C++ loop
+        ip = dstate.ip;
+        regs_ptr = reinterpret_cast<Value*>(dstate.regs);
+        // Continue with existing C++ dispatch loop below
+    }
+
+    for (;;) {
         const CompactInstruction& instruction = instructions_ptr[ip];
-        ++opcode_count_commit.delta;
 
         switch (instruction.op) {
             case BytecodeOp::R_LOAD_CONST: {
@@ -2613,11 +2770,37 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                 const int r_gslot = unpack_r_index_operand(instruction.operand);
-                if (!ensure_r_global_binding(r_gslot)) {
-                    return make_loc_error<Value>(module.name, span,
-                        "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(r_gslot)] + "'.");
+                // Fast path: use per-chunk flat cache (resolved once, reused across recursive calls)
+                if (active_chunk->globals_resolved) {
+                    regs_ptr[dst] = read_binding_value(*active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                    ++ip;
+                    break;
                 }
-                regs_ptr[dst] = read_binding_value(*reg_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                // First execution: resolve all globals for this chunk and cache
+                {
+                    const std::size_t gc = active_chunk->global_names.size();
+                    active_chunk->resolved_global_bindings.resize(gc, nullptr);
+                    active_chunk->resolved_global_owners.resize(gc, nullptr);
+                    Environment* base = global_base_env();
+                    for (std::size_t gi = 0; gi < gc; ++gi) {
+                        Environment* env = base;
+                        while (env != nullptr) {
+                            auto it = env->values.find(active_chunk->global_names[gi]);
+                            if (it != env->values.end()) {
+                                active_chunk->resolved_global_bindings[gi] = &it->second;
+                                active_chunk->resolved_global_owners[gi] = env;
+                                break;
+                            }
+                            env = env->parent;
+                        }
+                    }
+                    active_chunk->globals_resolved = true;
+                    if (active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)] == nullptr) {
+                        return make_loc_error<Value>(*active_module_name, span,
+                            "Unknown identifier '" + active_chunk->global_names[static_cast<std::size_t>(r_gslot)] + "'.");
+                    }
+                    regs_ptr[dst] = read_binding_value(*active_chunk->resolved_global_bindings[static_cast<std::size_t>(r_gslot)]);
+                }
                 ++ip;
                 break;
             }
@@ -2626,8 +2809,15 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ZEPHYR_TRY_ASSIGN(src, register_index(unpack_r_src_operand(instruction.operand), span));
                 const int r_gslot = unpack_r_index_operand(instruction.operand);
                 if (!ensure_r_global_binding(r_gslot)) {
-                    return make_loc_error<Value>(module.name, span,
-                        "Unknown identifier '" + chunk.global_names[static_cast<std::size_t>(r_gslot)] + "'.");
+                    // Fallback: direct resolve for iterative sub-frames
+                    ZEPHYR_TRY_ASSIGN(binding_pair_sg, resolve_global_binding(r_gslot, span));
+                    // Populate cache slots so code below can use them
+                    const std::size_t sg_s = static_cast<std::size_t>(r_gslot);
+                    if (active_chunk == &chunk && sg_s < r_global_count) {
+                        reg_global_binding_owners[sg_s] = binding_pair_sg.first;
+                        reg_global_bindings[sg_s] = binding_pair_sg.second;
+                        reg_global_binding_versions[sg_s] = binding_pair_sg.first->version;
+                    }
                 }
                 const std::size_t rgs = static_cast<std::size_t>(r_gslot);
                 Binding* binding = reg_global_bindings[rgs];
@@ -2843,20 +3033,109 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 break;
             }
             case BytecodeOp::R_YIELD: {
+                if (active_coroutine_ != nullptr && !iterative_call_stack_.empty()) {
+                    // Fiber-style yield: save IP, pop caller frame
+                    active_coroutine_->frames.front().ip_index = ip + 1;
+                    active_coroutine_->suspended = true;
+                    ++active_coroutine_->yield_count;
+                    const Value yv = regs_ptr[instruction.src1];
+
+                    auto& parent = iterative_call_stack_.back();
+                    ip = parent.ip;
+                    active_reg_base = parent.reg_base;
+                    active_reg_count = parent.reg_count;
+                    active_call_env = parent.call_env;
+                    active_module_name = parent.module_name;
+                    active_module_env = parent.module_env;
+                    active_upvalues = parent.upvalues;
+                    active_coroutine_ = parent.coroutine;
+                    active_chunk = parent.chunk;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + active_reg_base;
+                    regs_ptr[parent.dst] = yv;
+                    iterative_call_stack_.pop_back();
+                    continue;
+                }
                 const Span span = instruction_span(instruction);
                 return make_loc_error<Value>(module.name, span, "yield outside coroutine should be rejected at runtime.");
             }
             case BytecodeOp::R_CALL: {
+                const std::size_t dst = static_cast<std::size_t>(instruction.dst);
+                const std::size_t callee = static_cast<std::size_t>(instruction.src1);
+                const std::uint8_t argc = instruction.operand_a;
+                const std::uint8_t args_start = instruction.src2;
+
+                // Fast path: ScriptFunction with register-mode bytecode — iterative frame push
+                const Value& callee_val = regs_ptr[callee];
+                if (callee_val.is_object() && callee_val.as_object()->kind == ObjectKind::ScriptFunction) {
+                    auto* function = static_cast<ScriptFunctionObject*>(callee_val.as_object());
+                    if (function->bytecode != nullptr && function->bytecode->uses_register_mode) {
+                        if (function->bytecode.get() == active_chunk) {
+                            // ── Ultra-fast same-function recursion ──
+                            // Skip: chunk save/restore, instructions_ptr update, reg_count recompute,
+                            //       call_env/module_env save (all identical for same function)
+                            iterative_call_stack_.push_back({
+                                ip + 1, active_reg_base, active_reg_count, dst,
+                                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
+                            });
+                            active_reg_base = register_sp_;
+                            register_sp_ += active_reg_count;  // same reg count
+                            if (register_sp_ > register_pool_.size()) {
+                                register_pool_.resize(register_sp_ * 2, Value::nil());
+                            }
+                            Value* old_regs = regs_ptr;
+                            regs_ptr = register_pool_.data() + active_reg_base;
+                            for (std::uint8_t i = 0; i < argc; ++i) {
+                                regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
+                            }
+                            ip = 0;
+                            continue;
+                        }
+                        // ── Different-function call ──
+                        iterative_call_stack_.push_back({
+                            ip + 1, active_reg_base, active_reg_count, dst,
+                            active_chunk, active_call_env, active_module_name, active_module_env,
+                            active_upvalues, active_coroutine_
+                        });
+                        active_chunk = function->bytecode.get();
+                        active_call_env = function->closure;
+                        active_upvalues = &function->captured_upvalues;
+                        active_module_env = function->closure;
+                        instructions_ptr = active_chunk->instructions.data();
+                        metadata_ptr = active_chunk->metadata.data();
+                        constants_ptr = active_chunk->constants.data();
+                        instructions_size = active_chunk->instructions.size();
+
+                        const int mr = active_chunk->max_regs;
+                        const int lc = active_chunk->local_count;
+                        const std::size_t new_reg_count = static_cast<std::size_t>(mr > lc ? mr : lc);
+                        active_reg_base = register_sp_;
+                        register_sp_ += new_reg_count;
+                        if (register_sp_ > register_pool_.size()) {
+                            register_pool_.resize(register_sp_ * 2, Value::nil());
+                        }
+                        Value* old_regs = regs_ptr;
+                        regs_ptr = register_pool_.data() + active_reg_base;
+                        for (std::uint8_t i = 0; i < argc && i < new_reg_count; ++i) {
+                            regs_ptr[i] = old_regs[static_cast<std::uint8_t>(args_start + i)];
+                        }
+                        active_reg_count = new_reg_count;
+                        ip = 0;
+                        continue;
+                    }
+                }
+                // Slow path: build args vector for call_value()
                 const Span span = instruction_span(instruction);
-                ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
-                ZEPHYR_TRY_ASSIGN(callee, register_index(instruction.src1, span));
                 std::vector<Value> args;
-                args.reserve(instruction.operand_a);
-                for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
-                    ZEPHYR_TRY_ASSIGN(arg_reg, register_index(static_cast<std::uint8_t>(instruction.src2 + index), span));
+                args.reserve(argc);
+                for (std::uint8_t index = 0; index < argc; ++index) {
+                    ZEPHYR_TRY_ASSIGN(arg_reg, register_index(static_cast<std::uint8_t>(args_start + index), span));
                     args.push_back(regs_ptr[arg_reg]);
                 }
-                ZEPHYR_TRY_ASSIGN(result, call_value(regs_ptr[callee], args, span, module.name));
+                ZEPHYR_TRY_ASSIGN(result, call_value(regs_ptr[callee], args, span, *active_module_name));
                 regs_ptr[dst] = result;
                 ++ip;
                 break;
@@ -3004,8 +3283,235 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 regs_ptr[instruction.dst] = li_result;
                 ++ip; break;
             }
-            case BytecodeOp::R_RETURN:
-                return regs_ptr[instruction.src1];
+            case BytecodeOp::R_LOAD_UPVALUE: {
+                const std::uint8_t uv_dst = unpack_r_dst_operand(instruction.operand);
+                const int uv_slot = unpack_r_index_operand(instruction.operand);
+                if (active_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    regs_ptr[uv_dst] = (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value;
+                } else {
+                    regs_ptr[uv_dst] = Value::nil();
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_STORE_UPVALUE: {
+                const std::uint8_t uv_src = unpack_r_src_operand(instruction.operand);
+                const int uv_slot = unpack_r_index_operand(instruction.operand);
+                if (active_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_MAKE_FUNCTION: {
+                const Span span = instruction_span(instruction);
+                const InstructionMetadata& meta = metadata_ptr[ip];
+
+                // Cache params/return_type on first call — avoids 100K string/vector allocations
+                if (!meta.bytecode->closure_params_cached) {
+                    std::vector<Param> func_params;
+                    for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
+                        Param p;
+                        p.name = meta.names[i];
+                        p.span = span;
+                        if (!meta.names[i + 1].empty()) {
+                            p.type = TypeRef{{meta.names[i + 1]}, span};
+                        }
+                        func_params.push_back(std::move(p));
+                    }
+                    meta.bytecode->cached_closure_params = std::move(func_params);
+                    if (meta.type_name.has_value() && !meta.type_name->empty()) {
+                        meta.bytecode->cached_closure_return_type = TypeRef{{*meta.type_name}, span};
+                    }
+                    meta.bytecode->closure_params_cached = true;
+                }
+
+                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                auto* func_obj = allocate<ScriptFunctionObject>(
+                    ScriptFunctionObject::ClosureTag{},
+                    closure_env, span, meta.bytecode);
+
+                // Create upvalue cells directly from parent registers — no Environment walk
+                if (!meta.jump_table.empty()) {
+                    func_obj->captured_upvalues.reserve(meta.jump_table.size());
+                    for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
+                        func_obj->captured_upvalues.push_back(
+                            allocate<UpvalueCellObject>(
+                                regs_ptr[meta.jump_table[i]], true, std::nullopt,
+                                HandleContainerKind::ClosureCapture));
+                    }
+                }
+
+                regs_ptr[instruction.dst] = Value::object(func_obj);
+                ++ip; break;
+            }
+            case BytecodeOp::R_RESUME: {
+                const Value& target_rv = regs_ptr[instruction.src1];
+                if (!target_rv.is_object() || target_rv.as_object()->kind != ObjectKind::Coroutine) {
+                    const Span span = instruction_span(instruction);
+                    return make_loc_error<Value>(*active_module_name, span, "resume expects a coroutine value.");
+                }
+                auto* co = static_cast<CoroutineObject*>(target_rv.as_object());
+                if (co->completed) {
+                    regs_ptr[instruction.dst] = Value::nil();
+                    ++ip; break;
+                }
+                // Fiber-style fast path: started, single-frame, register-mode
+                if (co->started && co->frames.size() == 1 && co->frames[0].uses_register_mode) {
+                    // Push caller frame (same pattern as R_CALL)
+                    iterative_call_stack_.push_back({
+                        ip + 1, active_reg_base, active_reg_count,
+                        static_cast<std::size_t>(instruction.dst),
+                        active_chunk, active_call_env, active_module_name, active_module_env,
+                        active_upvalues, active_coroutine_
+                    });
+
+                    // Swap to coroutine state — Gravity-style pointer exchange
+                    auto& cf = co->frames.front();
+                    active_chunk = cf.bytecode.get();
+                    active_upvalues = &cf.captured_upvalues;
+                    active_coroutine_ = co;
+
+                    Value* co_regs = (cf.reg_count > 0 && cf.regs.empty())
+                        ? cf.inline_regs : cf.regs.data();
+                    regs_ptr = co_regs;
+                    ip = cf.ip_index;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
+
+                    co->suspended = false;
+                    ++co->resume_count;
+                    continue;  // Back to main dispatch loop — no separate loop!
+                }
+                // Slow path: first resume, multi-frame, or non-register-mode
+                {
+                    const Span span = instruction_span(instruction);
+                    ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target_rv, span, *active_module_name));
+                    regs_ptr[instruction.dst] = result;
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_MAKE_COROUTINE: {
+                const Span span = instruction_span(instruction);
+                const InstructionMetadata& meta = metadata_ptr[ip];
+
+                // Cache params/return_type on first call (same pattern as R_MAKE_FUNCTION)
+                if (meta.bytecode && !meta.bytecode->closure_params_cached) {
+                    std::vector<Param> co_params;
+                    for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
+                        Param p;
+                        p.name = meta.names[i];
+                        p.span = span;
+                        if (!meta.names[i + 1].empty()) {
+                            p.type = TypeRef{{meta.names[i + 1]}, span};
+                        }
+                        co_params.push_back(std::move(p));
+                    }
+                    meta.bytecode->cached_closure_params = std::move(co_params);
+                    if (meta.type_name.has_value() && !meta.type_name->empty()) {
+                        meta.bytecode->cached_closure_return_type = TypeRef{{*meta.type_name}, span};
+                    }
+                    meta.bytecode->closure_params_cached = true;
+                }
+
+                if (!meta.bytecode->cached_closure_params.empty()) {
+                    return make_loc_error<Value>(*active_module_name, span,
+                                                 "coroutine fn expressions do not support parameters yet.");
+                }
+
+                const auto return_type_str = (meta.type_name.has_value() && !meta.type_name->empty())
+                    ? std::optional<std::string>(*meta.type_name)
+                    : std::nullopt;
+
+                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                auto* coroutine = allocate<CoroutineObject>(
+                    *active_module_name,
+                    closure_env,
+                    meta.bytecode,
+                    return_type_str);
+
+                auto& root = coroutine->frames.front();
+                root.global_resolution_env = module_or_root_environment(root.closure);
+
+                // Create upvalue cells directly from parent registers (same as R_MAKE_FUNCTION)
+                if (!meta.jump_table.empty() && root.bytecode != nullptr) {
+                    root.captured_upvalues.reserve(meta.jump_table.size());
+                    for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
+                        root.captured_upvalues.push_back(
+                            allocate<UpvalueCellObject>(
+                                regs_ptr[meta.jump_table[i]], true, std::nullopt,
+                                HandleContainerKind::CoroutineFrame));
+                    }
+                }
+
+                // Pre-initialize coroutine frame (move from first-resume to creation time)
+                // This ensures ALL resumes take the fiber-style fast path in R_RESUME.
+                root.root_env = allocate<Environment>(root.closure);
+                if (root.bytecode != nullptr) {
+                    install_upvalue_bindings(root.root_env, *root.bytecode, root.captured_upvalues);
+                }
+                root.current_env = root.root_env;
+                root.uses_register_mode = root.bytecode != nullptr && root.bytecode->uses_register_mode;
+                if (root.bytecode && root.uses_register_mode) {
+                    const int needed = std::max(root.bytecode->max_regs, root.bytecode->local_count);
+                    if (needed > 0 && needed <= CoroutineFrameState::kInlineRegs) {
+                        root.reg_count = static_cast<std::uint8_t>(needed);
+                        std::fill_n(root.inline_regs, needed, Value::nil());
+                    } else if (needed > 0) {
+                        root.regs.assign(static_cast<std::size_t>(needed), Value::nil());
+                    }
+                }
+                root.ip = 0;
+                root.ip_index = 0;
+                coroutine->started = true;
+
+                regs_ptr[instruction.dst] = Value::object(coroutine);
+                ++ip; break;
+            }
+            case BytecodeOp::R_RETURN: {
+                const Value return_value = regs_ptr[instruction.src1];
+                if (!iterative_call_stack_.empty()) {
+                    register_sp_ = active_reg_base;
+                    auto& parent = iterative_call_stack_.back();
+                    if (parent.chunk == nullptr) {
+                        // ── Ultra-fast same-function return ──
+                        ip = parent.ip;
+                        active_reg_base = parent.reg_base;
+                        regs_ptr = register_pool_.data() + active_reg_base;
+                        regs_ptr[parent.dst] = return_value;
+                        iterative_call_stack_.pop_back();
+                        continue;
+                    }
+                    // ── Different-function return ──
+                    // If returning from a coroutine frame, mark it completed
+                    if (parent.coroutine != nullptr && active_coroutine_ != nullptr) {
+                        active_coroutine_->completed = true;
+                        active_coroutine_->suspended = false;
+                    }
+                    ip = parent.ip;
+                    active_reg_base = parent.reg_base;
+                    active_reg_count = parent.reg_count;
+                    active_call_env = parent.call_env;
+                    active_module_name = parent.module_name;
+                    active_module_env = parent.module_env;
+                    active_upvalues = parent.upvalues;
+                    active_coroutine_ = parent.coroutine;
+                    active_chunk = parent.chunk;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + active_reg_base;
+                    regs_ptr[parent.dst] = return_value;
+                    iterative_call_stack_.pop_back();
+                    continue;
+                }
+                return return_value;
+            }
             case BytecodeOp::R_JUMP:
                 ip = static_cast<std::size_t>(instruction.operand);
                 break;
@@ -4962,16 +5468,8 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         return CoroutineExecutionResult{false, ret_val, executed_steps};
     };
 
-    while (local_ip < instrs_count) {
-        if (gc_stress_enabled_) {
-            maybe_run_gc_stress_safe_point();
-            frame_ptr = &coroutine->frames.front();
-            regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
-                ? frame_ptr->inline_regs : frame_ptr->regs.data();
-        }
+    for (;;) {
         const CompactInstruction& instr = instrs_ptr[local_ip];
-        ++executed_steps;
-        ++opcode_execution_count_;
 
         switch (instr.op) {
         case BytecodeOp::R_LOAD_CONST: {
@@ -5612,13 +6110,12 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         }
         case BytecodeOp::R_YIELD: {
             const Value yield_value = regs_ptr[instr.src1];
-            const Span span = instruction_span(instr);
-            ZEPHYR_TRY(validate_handle_store(yield_value, HandleContainerKind::CoroutineFrame, span, module_name, "coroutine yield"));
             frame_ptr->ip_index = local_ip + 1;
             coroutine->suspended = true;
-            compact_suspended_coroutine(coroutine);
-            register_suspended_coroutine(coroutine);
-            record_coroutine_trace_event(CoroutineTraceEvent::Type::Yielded, coroutine);
+            // Skip: validate_handle_store (no host handles in typical coroutines)
+            // Skip: compact_suspended_coroutine (not needed for short-lived suspends)
+            // Skip: register_suspended_coroutine (unordered_set insert/erase per yield is expensive)
+            // Skip: record_coroutine_trace_event (tracing overhead)
             return CoroutineExecutionResult{true, yield_value, executed_steps};
         }
         case BytecodeOp::R_RETURN: {
@@ -9105,7 +9602,6 @@ RuntimeResult<Value> Runtime::evaluate_coroutine(Environment* environment, Corou
 }
 
 RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const Span& span, const std::string& module_name) {
-    ScopedVectorItem<const Value*> coroutine_root(rooted_values_, &value);
     if (!value.is_object() || value.as_object()->kind != ObjectKind::Coroutine) {
         return make_loc_error<Value>(module_name, span, "resume expects a coroutine value.");
     }
@@ -9117,14 +9613,8 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
     if (coroutine->frames.empty()) {
         return make_loc_error<Value>(module_name, span, "Coroutine frame stack is empty.");
     }
-    ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(coroutine->frames.front().bytecode.get(), span, module_name, "Coroutine"));
-    if (coroutine->suspended) {
-        unregister_suspended_coroutine(coroutine);
-        coroutine->suspended = false;
-    }
+    coroutine->suspended = false;
     ++coroutine->resume_count;
-    ensure_coroutine_trace_id(coroutine);
-    record_coroutine_trace_event(CoroutineTraceEvent::Type::Resumed, coroutine);
 
     auto& root = coroutine->frames.front();
 
@@ -9162,38 +9652,14 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
     // Step 2 fast path: already-started single-frame register-mode coroutine —
     // skip fake_module construction (string copy) and resume_coroutine_bytecode overhead.
     if (coroutine->frames.size() == 1 && coroutine->frames[0].uses_register_mode) {
-        ScopedVectorPush<CoroutineObject> fast_active(active_coroutines_, coroutine);
+        active_coroutines_.push_back(coroutine);
         auto fast_result = resume_register_coroutine_fast(coroutine, span);
+        active_coroutines_.pop_back();
         if (!fast_result) {
-            const std::string error_with_trace = append_coroutine_stack_trace(std::move(fast_result.error()), coroutine);
-            unregister_suspended_coroutine(coroutine);
             coroutine->completed = true;
             coroutine->suspended = false;
-            record_coroutine_completed(coroutine);
-            coroutine->last_resume_step_count = 0;
-            auto& reset_root = coroutine->frames.front();
-            reset_root.stack.clear();
-            reset_root.locals.clear();
-            reset_root.captured_upvalues.clear();
-            reset_root.local_binding_owners.clear();
-            reset_root.local_bindings.clear();
-            reset_root.local_binding_versions.clear();
-            reset_root.global_binding_owners.clear();
-            reset_root.global_bindings.clear();
-            reset_root.global_binding_versions.clear();
-            reset_root.scope_stack.clear();
-            reset_root.regs.clear();
-            reset_root.reg_cards.clear();
-            reset_root.reg_count = 0;
-            reset_root.current_env = nullptr;
-            reset_root.root_env = nullptr;
-            reset_root.ip = 0;
-            reset_root.ip_index = 0;
-            return std::unexpected(error_with_trace);
+            return std::unexpected(std::move(fast_result.error()));
         }
-        coroutine->last_resume_step_count = fast_result->step_count;
-        coroutine->total_step_count += fast_result->step_count;
-        coroutine->max_resume_step_count = std::max(coroutine->max_resume_step_count, fast_result->step_count);
         if (fast_result->yielded) {
             ++coroutine->yield_count;
         }
@@ -11543,31 +12009,41 @@ RuntimeResult<std::vector<UpvalueCellObject*>> Runtime::capture_upvalue_cells(En
                                                                               const std::string& module_name) {
     std::vector<UpvalueCellObject*> captured;
     captured.reserve(upvalue_names.size());
-    const std::string capture_context =
-        container == HandleContainerKind::CoroutineFrame ? "coroutine capture" : "closure capture";
+    const bool need_handle_validation = !host_handles_.empty();
     for (const auto& name : upvalue_names) {
         bool found = false;
-        for (Environment* current = environment; current != nullptr; current = current->parent) {
-            auto it = current->values.find(name);
-            if (it == current->values.end()) {
-                continue;
+        // Fast path: check immediate environment first (most common case for closures)
+        if (environment != nullptr && environment->kind != EnvironmentKind::Root && environment->kind != EnvironmentKind::Module) {
+            auto it = environment->values.find(name);
+            if (it != environment->values.end()) {
+                if (need_handle_validation) {
+                    static const std::string capture_ctx = "closure capture";
+                    ZEPHYR_TRY(validate_handle_store(read_binding_value(it->second), container, span, module_name, capture_ctx));
+                }
+                captured.push_back(ensure_binding_cell(environment, name, it->second, container));
+                found = true;
             }
-            const Value value = read_binding_value(it->second);
-            ZEPHYR_TRY(validate_handle_store(value, container, span, module_name, capture_context));
-            if (current->kind == EnvironmentKind::Root || current->kind == EnvironmentKind::Module) {
-                return make_loc_error<std::vector<UpvalueCellObject*>>(
-                    module_name,
-                    span,
-                    "Internal compiler/runtime mismatch for captured upvalue '" + name + "'.");
-            }
-            captured.push_back(ensure_binding_cell(current, name, it->second, container));
-            found = true;
-            break;
         }
         if (!found) {
-            return make_loc_error<std::vector<UpvalueCellObject*>>(
-                module_name,
-                span,
+            // Slow path: walk environment chain
+            for (Environment* current = environment ? environment->parent : nullptr; current != nullptr; current = current->parent) {
+                auto it = current->values.find(name);
+                if (it == current->values.end()) continue;
+                if (current->kind == EnvironmentKind::Root || current->kind == EnvironmentKind::Module) {
+                    return make_loc_error<std::vector<UpvalueCellObject*>>(module_name, span,
+                        "Internal compiler/runtime mismatch for captured upvalue '" + name + "'.");
+                }
+                if (need_handle_validation) {
+                    static const std::string capture_ctx = "closure capture";
+                    ZEPHYR_TRY(validate_handle_store(read_binding_value(it->second), container, span, module_name, capture_ctx));
+                }
+                captured.push_back(ensure_binding_cell(current, name, it->second, container));
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return make_loc_error<std::vector<UpvalueCellObject*>>(module_name, span,
                 "Failed to resolve captured upvalue '" + name + "'.");
         }
     }
@@ -11652,7 +12128,11 @@ RuntimeResult<ScriptFunctionObject*> Runtime::create_script_function(const std::
                                                                      const Span& span,
                                                                      const std::vector<std::string>& generic_params,
                                                                      const std::vector<TraitBound>& where_clauses) {
-    ZEPHYR_TRY(validate_closure_capture(closure, span, module_name.empty() ? name : module_name));
+    // Skip closure validation when no host handles are registered (common case).
+    // validate_closure_capture walks the entire environment chain — expensive for hot closures.
+    if (!host_handles_.empty()) {
+        ZEPHYR_TRY(validate_closure_capture(closure, span, module_name.empty() ? name : module_name));
+    }
     ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(bytecode.get(), span, module_name.empty() ? name : module_name, "Script function"));
     auto* function =
         allocate<ScriptFunctionObject>(name, module_name, params, return_type, body, select_closure_environment(closure, bytecode), span, bytecode, generic_params, where_clauses);
@@ -12901,6 +13381,9 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_SI_MODI_ADD_STORE:
             case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
             case BytecodeOp::R_SI_LOOP_STEP:
+            case BytecodeOp::R_MAKE_FUNCTION:
+            case BytecodeOp::R_MAKE_COROUTINE:
+            case BytecodeOp::R_RESUME:
                 return true;
             default:
                 return false;
@@ -13096,6 +13579,36 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                             << " step=" << static_cast<int>(static_cast<std::int8_t>(instruction.src1))
                             << " limit=" << unpack_r_si_ls_limit(instruction.ic_slot)
                             << " body=" << unpack_r_si_ls_body(instruction.ic_slot);
+                        break;
+                    case BytecodeOp::R_MAKE_FUNCTION:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " name=" << metadata.string_operand
+                            << " captures=" << metadata.jump_table.size();
+                        if (metadata.bytecode) {
+                            out << " upvalues=[";
+                            for (std::size_t ui = 0; ui < metadata.jump_table.size(); ++ui) {
+                                if (ui > 0) out << ",";
+                                out << "r" << metadata.jump_table[ui];
+                            }
+                            out << "]";
+                        }
+                        break;
+                    case BytecodeOp::R_MAKE_COROUTINE:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " name=" << metadata.string_operand
+                            << " captures=" << metadata.jump_table.size();
+                        if (metadata.bytecode) {
+                            out << " upvalues=[";
+                            for (std::size_t ui = 0; ui < metadata.jump_table.size(); ++ui) {
+                                if (ui > 0) out << ",";
+                                out << "r" << metadata.jump_table[ui];
+                            }
+                            out << "]";
+                        }
+                        break;
+                    case BytecodeOp::R_RESUME:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " src=r" << static_cast<int>(instruction.src1);
                         break;
                     default:
                         break;

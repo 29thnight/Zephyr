@@ -1,0 +1,25 @@
+func counter(limit) {
+    var fiber = Fiber.create({
+        var i = 0;
+        while (i < limit) {
+            Fiber.yield(i);
+            i = i + 1;
+        }
+        return limit;
+    });
+    return fiber;
+}
+
+func main() {
+    var total = 0;
+    var round = 0;
+    while (round < 100) {
+        var co = counter(1000);
+        var val = co.call();
+        while (val < 1000) {
+            total = total + val;
+            val = co.call();
+        }
+        round = round + 1;
+    }
+}

@@ -579,7 +579,9 @@ inline std::vector<std::string> encode_param_metadata(const std::vector<Param>& 
     return encoded;
 }
 
-struct BlockStmt;
+struct BlockStmt final : Stmt {
+    std::vector<StmtPtr> statements;
+};
 
 struct FunctionExpr final : Expr {
     std::vector<Param> params;
@@ -662,10 +664,6 @@ struct LetStmt final : Stmt {
     PatternPtr pattern;
     ExprPtr initializer;
     std::unique_ptr<BlockStmt> else_branch;
-};
-
-struct BlockStmt final : Stmt {
-    std::vector<StmtPtr> statements;
 };
 
 struct IfStmt final : Stmt {

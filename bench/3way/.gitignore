@@ -1,0 +1,17 @@
+# Build artifacts (CMake generated)
+gravity/CMakeCache.txt
+gravity/CMakeFiles/
+gravity/Makefile
+gravity/cmake_install.cmake
+gravity/src/
+gravity/lib/
+gravity/bin/
+
+# Lua build artifacts
+lua-5.5.0/*.obj
+lua-5.5.0/*.exe
+lua-5.5.0/*.lib
+lua-5.5.0/*.exp
+
+# Benchmark results (contain absolute paths, regenerated per run)
+results/comparison.json

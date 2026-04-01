@@ -1,0 +1,9 @@
+fn main() {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 100000 {
+        let arr = [i, i + 1, i + 2, i + 3];
+        total = total + arr[0] + arr[1] + arr[2] + arr[3];
+        i = i + 1;
+    }
+}
