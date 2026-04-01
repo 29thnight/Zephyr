@@ -1,7 +1,7 @@
 @echo off
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
 
-set ZEPHYR_ROOT=C:\Users\lance\source\Zephyr\.claude\worktrees\quirky-black
+set ZEPHYR_ROOT=%~dp0..\..
 set CMAKE="C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 set CLANG_CL="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin\clang-cl.exe"
 set PROFDATA=%ZEPHYR_ROOT%\build\zephyr.profdata

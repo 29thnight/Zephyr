@@ -2525,6 +2525,13 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     // Skip for functions with upvalues (C dispatch doesn't support R_LOAD_UPVALUE yet).
     static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
                   "CompactInstruction and ZInstruction must have identical layout.");
+    static_assert(static_cast<int>(BytecodeOp::R_ADD) == ZOP_R_ADD);
+    static_assert(static_cast<int>(BytecodeOp::R_RETURN) == ZOP_R_RETURN);
+    static_assert(static_cast<int>(BytecodeOp::R_CALL) == ZOP_R_CALL);
+    static_assert(static_cast<int>(BytecodeOp::R_LOAD_GLOBAL) == ZOP_R_LOAD_GLOBAL);
+    static_assert(static_cast<int>(BytecodeOp::R_LOAD_UPVALUE) == ZOP_R_LOAD_UPVALUE);
+    static_assert(static_cast<int>(BytecodeOp::R_MAKE_FUNCTION) == ZOP_R_MAKE_FUNCTION);
+    static_assert(static_cast<int>(BytecodeOp::R_RESUME) == ZOP_R_RESUME);
     // Skip C dispatch for functions with upvalues OR R_MAKE_FUNCTION (not yet in C dispatch table).
     // These fall back to call_value which misses the iterative frame stack.
     if (captured_upvalues == nullptr || captured_upvalues->empty()) {

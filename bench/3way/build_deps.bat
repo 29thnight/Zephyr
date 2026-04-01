@@ -8,8 +8,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set LUA_SRC=C:\Users\lance\Downloads\lua-5.5.0\src
-set GRAVITY_SRC=C:\Users\lance\Downloads\gravity-master
+if not defined LUA_SRC set LUA_SRC=C:\Users\lance\Downloads\lua-5.5.0\src
+if not defined GRAVITY_SRC set GRAVITY_SRC=C:\Users\lance\Downloads\gravity-master
 set BENCH_DIR=%~dp0
 
 REM ============================================================

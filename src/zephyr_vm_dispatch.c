@@ -33,8 +33,9 @@ static inline int try_sub_i48(int64_t a, int64_t b, int64_t* out) {
 }
 static inline int try_mul_i48(int64_t a, int64_t b, int64_t* out) {
     if (a == 0 || b == 0) { *out = 0; return 1; }
-    int64_t r = a * b;
-    if (r / a != b || r < ZV_INT_MIN || r > ZV_INT_MAX) return 0;
+    int64_t r;
+    if (__builtin_mul_overflow(a, b, &r)) return 0;
+    if (r < ZV_INT_MIN || r > ZV_INT_MAX) return 0;
     *out = r; return 1;
 }
 
@@ -245,12 +246,12 @@ op_R_SI_CMP_JUMP_FALSE: {
         int64_t a = zv_as_int(lhs), b = zv_as_int(rhs);
         int cmp_val = 0;
         switch (cmp_op) {
-            case ZOP_R_LT: cmp_val = a < b;  break;
-            case ZOP_R_LE: cmp_val = a <= b; break;
-            case ZOP_R_GT: cmp_val = a > b;  break;
-            case ZOP_R_GE: cmp_val = a >= b; break;
-            case ZOP_R_EQ: cmp_val = a == b; break;
-            case ZOP_R_NE: cmp_val = a != b; break;
+            case 0: cmp_val = a < b;  break;  /* Less */
+            case 1: cmp_val = a <= b; break;  /* LessEqual */
+            case 2: cmp_val = a > b;  break;  /* Greater */
+            case 3: cmp_val = a >= b; break;  /* GreaterEqual */
+            case 4: cmp_val = a == b; break;  /* Equal */
+            case 5: cmp_val = a != b; break;  /* NotEqual */
             default: cmp_val = 0; break;
         }
         if (cmp_val) {

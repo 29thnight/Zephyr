@@ -1,9 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/lance/source/Zephyr/.claude/worktrees/quirky-black/bench/3way/gravity/cmake_install.cmake",
-		"C:/Users/lance/source/Zephyr/.claude/worktrees/quirky-black/bench/3way/gravity/src/cmake_install.cmake",
-		"C:/Users/lance/source/Zephyr/.claude/worktrees/quirky-black/bench/3way/gravity/src/cli/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

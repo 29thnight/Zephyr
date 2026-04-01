@@ -5387,6 +5387,8 @@ private:
         if (const auto upvalue_slot = resolve_upvalue_slot(name); upvalue_slot.has_value()) {
             const std::uint8_t reg = register_allocator_.alloc_temp();
             int packed = 0;
+            // Note: try_pack_r_src_index_operand has identical bit layout to dst variant;
+            // using src version here since operand packs dst in low byte + index in high bytes.
             if (!try_pack_r_src_index_operand(reg, static_cast<int>(*upvalue_slot), packed)) {
                 fail_register_compile();
                 return std::nullopt;
@@ -5834,6 +5836,10 @@ private:
             std::vector<std::int32_t> captured_reg_indices;
             for (const auto& uv_name : inner_bytecode->upvalue_names) {
                 if (const auto slot = resolve_local_slot(uv_name); slot.has_value()) {
+                    if (*slot >= 256) {
+                        fail_register_compile();
+                        return std::nullopt;
+                    }
                     captured_reg_indices.push_back(static_cast<std::int32_t>(*slot));
                 } else if (const auto parent_uv = find_upvalue_slot(uv_name); parent_uv.has_value()) {
                     // The captured variable is itself an upvalue of the current function.
@@ -5890,6 +5896,10 @@ private:
             if (inner_bytecode) {
                 for (const auto& uv_name : inner_bytecode->upvalue_names) {
                     if (const auto slot = resolve_local_slot(uv_name); slot.has_value()) {
+                        if (*slot >= 256) {
+                            fail_register_compile();
+                            return std::nullopt;
+                        }
                         capture_regs.push_back(static_cast<std::int32_t>(*slot));
                     } else {
                         fail_register_compile();

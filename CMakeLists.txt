@@ -13,12 +13,16 @@ option(ZEPHYR_BUILD_SAMPLES "Build sample executables"       ON)
 option(ZEPHYR_ENABLE_PGO    "Enable PGO instrumentation (MSVC /GL+/LTCG)" OFF)
 
 # ─── ZephyrRuntime (static library) ──────────────────────────────────────────
-add_library(ZephyrRuntime STATIC
+set(ZEPHYR_RUNTIME_SOURCES
     src/zephyr.cpp
     src/zephyr_parser.cpp
     src/zephyr_gc_impl.cpp
-    src/zephyr_vm_dispatch.c
 )
+# zephyr_vm_dispatch.c uses computed goto (GCC/Clang extension), not supported by MSVC
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    list(APPEND ZEPHYR_RUNTIME_SOURCES src/zephyr_vm_dispatch.c)
+endif()
+add_library(ZephyrRuntime STATIC ${ZEPHYR_RUNTIME_SOURCES})
 
 target_include_directories(ZephyrRuntime
     PUBLIC  include
