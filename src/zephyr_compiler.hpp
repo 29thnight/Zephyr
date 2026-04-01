@@ -549,6 +549,11 @@ struct BytecodeFunction {
     int max_regs = 0;
     int spill_count = 0;
 
+    // ── R_MAKE_FUNCTION param cache (parsed once from metadata, reused) ──
+    mutable std::vector<Param> cached_closure_params;
+    mutable std::optional<TypeRef> cached_closure_return_type;
+    mutable bool closure_params_cached = false;
+
     // ── Global binding flat cache (resolved once, reused across recursive calls) ──
     mutable std::vector<Binding*> resolved_global_bindings;
     mutable std::vector<Environment*> resolved_global_owners;

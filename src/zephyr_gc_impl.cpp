@@ -3274,56 +3274,46 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 const Span span = instruction_span(instruction);
                 const InstructionMetadata& meta = metadata_ptr[ip];
 
-                // Build params from metadata (interleaved name/type pairs)
-                std::vector<Param> func_params;
-                for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
-                    Param p;
-                    p.name = meta.names[i];
-                    p.span = span;
-                    if (!meta.names[i + 1].empty()) {
-                        p.type = TypeRef{{meta.names[i + 1]}, span};
+                // Cache params/return_type on first call — avoids 100K string/vector allocations
+                if (!meta.bytecode->closure_params_cached) {
+                    std::vector<Param> func_params;
+                    for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
+                        Param p;
+                        p.name = meta.names[i];
+                        p.span = span;
+                        if (!meta.names[i + 1].empty()) {
+                            p.type = TypeRef{{meta.names[i + 1]}, span};
+                        }
+                        func_params.push_back(std::move(p));
                     }
-                    func_params.push_back(std::move(p));
+                    meta.bytecode->cached_closure_params = std::move(func_params);
+                    if (meta.type_name.has_value() && !meta.type_name->empty()) {
+                        meta.bytecode->cached_closure_return_type = TypeRef{{*meta.type_name}, span};
+                    }
+                    meta.bytecode->closure_params_cached = true;
                 }
 
-                std::optional<TypeRef> ret_type;
-                if (meta.type_name.has_value() && !meta.type_name->empty()) {
-                    ret_type = TypeRef{{*meta.type_name}, span};
-                }
-
-                // Allocate the ScriptFunctionObject directly instead of going through
-                // create_script_function.  create_script_function calls capture_upvalue_cells
-                // which walks the Environment chain — but in register mode the captured
-                // locals live in registers, not in any Environment.  We create upvalue cells
-                // from registers below (Approach B).
-                const std::string func_name = meta.string_operand.empty() ? "<anonymous>" : meta.string_operand;
                 Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
                 auto* func_obj = allocate<ScriptFunctionObject>(
-                    func_name,
+                    meta.string_operand.empty() ? "<anonymous>" : meta.string_operand,
                     *active_module_name,
-                    func_params,
-                    ret_type,
-                    nullptr,       // no AST body in register mode
+                    meta.bytecode->cached_closure_params,
+                    meta.bytecode->cached_closure_return_type,
+                    nullptr,
                     closure_env,
                     span,
                     meta.bytecode,
                     std::vector<std::string>{});
 
-                // Create upvalue cells directly from parent registers (Approach B).
-                // This bypasses capture_upvalue_cells entirely — no Environment walk,
-                // no hash map lookup.  The jump_table stores the parent register index
-                // for each upvalue, in the same order as inner_bytecode->upvalue_names.
+                // Create upvalue cells directly from parent registers — no Environment walk
                 if (!meta.jump_table.empty()) {
-                    std::vector<UpvalueCellObject*> cells;
-                    cells.reserve(meta.jump_table.size());
+                    func_obj->captured_upvalues.reserve(meta.jump_table.size());
                     for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
-                        const int reg_idx = meta.jump_table[i];
-                        auto* cell = allocate<UpvalueCellObject>(
-                            regs_ptr[reg_idx], true, std::nullopt,
-                            HandleContainerKind::ClosureCapture);
-                        cells.push_back(cell);
+                        func_obj->captured_upvalues.push_back(
+                            allocate<UpvalueCellObject>(
+                                regs_ptr[meta.jump_table[i]], true, std::nullopt,
+                                HandleContainerKind::ClosureCapture));
                     }
-                    func_obj->captured_upvalues = std::move(cells);
                 }
 
                 regs_ptr[instruction.dst] = Value::object(func_obj);
