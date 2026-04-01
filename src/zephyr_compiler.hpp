@@ -545,6 +545,11 @@ struct BytecodeFunction {
     bool uses_register_mode = false;
     int max_regs = 0;
     int spill_count = 0;
+
+    // ── Global binding flat cache (resolved once, reused across recursive calls) ──
+    mutable std::vector<Binding*> resolved_global_bindings;
+    mutable std::vector<Environment*> resolved_global_owners;
+    mutable bool globals_resolved = false;
 };
 
 class RegisterAllocator {
@@ -3524,6 +3529,11 @@ private:
     Environment* root_environment_ = nullptr;
     std::vector<Environment*> active_environments_;
     std::vector<const std::vector<Value>*> rooted_value_vectors_;
+
+    // ── Register stack pool for execute_register_bytecode ────────────────
+    // Avoids per-call heap allocation of register vectors during recursive calls.
+    std::vector<Value> register_pool_;
+    std::size_t register_sp_ = 0;
     std::vector<const Value*> rooted_values_;
     std::vector<Environment*> dirty_root_environments_;
     std::vector<GcObject*> dirty_objects_;

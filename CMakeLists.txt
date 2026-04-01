@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(Zephyr LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -51,9 +51,10 @@ if(ZEPHYR_BUILD_CLI)
         cli/main.cpp
         cli/lsp_server.cpp
         cli/dap_server.cpp
+        bench/bench_runner.cpp
     )
     target_link_libraries(zephyr_cli PRIVATE ZephyrRuntime)
-    target_include_directories(zephyr_cli PRIVATE include)
+    target_include_directories(zephyr_cli PRIVATE include bench)
     if(MSVC)
         target_compile_options(zephyr_cli PRIVATE /W3 /permissive- /bigobj
             $<$<CONFIG:Release>:/O2 /GL>)
@@ -75,7 +76,7 @@ if(ZEPHYR_BUILD_TESTS)
         tests/test_corpus.cpp
     )
     target_link_libraries(zephyr_tests PRIVATE ZephyrRuntime)
-    target_include_directories(zephyr_tests PRIVATE include tests)
+    target_include_directories(zephyr_tests PRIVATE include tests bench)
     if(MSVC)
         target_compile_options(zephyr_tests PRIVATE /W3 /permissive- /bigobj
             $<$<CONFIG:Release>:/O2>)

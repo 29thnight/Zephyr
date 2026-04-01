@@ -1,0 +1,9 @@
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 100000) {
+        var arr = [i, i + 1, i + 2, i + 3];
+        total = total + arr[0] + arr[1] + arr[2] + arr[3];
+        i = i + 1;
+    }
+}
