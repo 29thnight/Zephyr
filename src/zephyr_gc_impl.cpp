@@ -9510,7 +9510,6 @@ RuntimeResult<Value> Runtime::evaluate_coroutine(Environment* environment, Corou
 }
 
 RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const Span& span, const std::string& module_name) {
-    ScopedVectorItem<const Value*> coroutine_root(rooted_values_, &value);
     if (!value.is_object() || value.as_object()->kind != ObjectKind::Coroutine) {
         return make_loc_error<Value>(module_name, span, "resume expects a coroutine value.");
     }
@@ -9522,14 +9521,11 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
     if (coroutine->frames.empty()) {
         return make_loc_error<Value>(module_name, span, "Coroutine frame stack is empty.");
     }
-    ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(coroutine->frames.front().bytecode.get(), span, module_name, "Coroutine"));
     if (coroutine->suspended) {
         unregister_suspended_coroutine(coroutine);
         coroutine->suspended = false;
     }
     ++coroutine->resume_count;
-    ensure_coroutine_trace_id(coroutine);
-    record_coroutine_trace_event(CoroutineTraceEvent::Type::Resumed, coroutine);
 
     auto& root = coroutine->frames.front();
 
@@ -9567,38 +9563,14 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
     // Step 2 fast path: already-started single-frame register-mode coroutine —
     // skip fake_module construction (string copy) and resume_coroutine_bytecode overhead.
     if (coroutine->frames.size() == 1 && coroutine->frames[0].uses_register_mode) {
-        ScopedVectorPush<CoroutineObject> fast_active(active_coroutines_, coroutine);
+        active_coroutines_.push_back(coroutine);
         auto fast_result = resume_register_coroutine_fast(coroutine, span);
+        active_coroutines_.pop_back();
         if (!fast_result) {
-            const std::string error_with_trace = append_coroutine_stack_trace(std::move(fast_result.error()), coroutine);
-            unregister_suspended_coroutine(coroutine);
             coroutine->completed = true;
             coroutine->suspended = false;
-            record_coroutine_completed(coroutine);
-            coroutine->last_resume_step_count = 0;
-            auto& reset_root = coroutine->frames.front();
-            reset_root.stack.clear();
-            reset_root.locals.clear();
-            reset_root.captured_upvalues.clear();
-            reset_root.local_binding_owners.clear();
-            reset_root.local_bindings.clear();
-            reset_root.local_binding_versions.clear();
-            reset_root.global_binding_owners.clear();
-            reset_root.global_bindings.clear();
-            reset_root.global_binding_versions.clear();
-            reset_root.scope_stack.clear();
-            reset_root.regs.clear();
-            reset_root.reg_cards.clear();
-            reset_root.reg_count = 0;
-            reset_root.current_env = nullptr;
-            reset_root.root_env = nullptr;
-            reset_root.ip = 0;
-            reset_root.ip_index = 0;
-            return std::unexpected(error_with_trace);
+            return std::unexpected(std::move(fast_result.error()));
         }
-        coroutine->last_resume_step_count = fast_result->step_count;
-        coroutine->total_step_count += fast_result->step_count;
-        coroutine->max_resume_step_count = std::max(coroutine->max_resume_step_count, fast_result->step_count);
         if (fast_result->yielded) {
             ++coroutine->yield_count;
         }
