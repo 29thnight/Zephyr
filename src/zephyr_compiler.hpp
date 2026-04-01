@@ -79,6 +79,7 @@ enum class BytecodeOp {
     R_DIV,
     R_MOD,
     R_LOAD_CONST,
+    R_LOAD_INT,
     R_LOAD_GLOBAL,
     R_STORE_GLOBAL,
     R_MOVE,
@@ -100,9 +101,23 @@ enum class BytecodeOp {
     R_SI_SUB_STORE,
     R_SI_MUL_STORE,
     R_SI_CMP_JUMP_FALSE,
+    R_SI_CMPI_JUMP_FALSE,
     R_SI_LOAD_ADD_STORE,
+    R_SI_MODI_ADD_STORE,  // dst=dst_reg, src1=accum_src_reg, src2=mod_src_reg, operand_a=divisor_imm8; dst = src1 + (src2 % operand_a)
+    R_SI_ADDI_CMPI_LT_JUMP,  // operand=(int16_limit<<16)|(int8_addi<<8)|reg; ic_slot=body_start; reg+=addi; if(reg<limit) goto ic_slot else fall-through
+    R_SI_LOOP_STEP,  // dst=accum, src1=step(int8), src2=iter, operand_a=div_imm8; ic_slot=(int16_limit<<16)|uint16_body_start
+                     // accum += iter%div; iter += step; if(iter<limit) goto body_start else fall-through
     R_SPILL_LOAD,
     R_SPILL_STORE,
+    R_ADDI,
+    R_MODI,
+    R_ADDI_JUMP,
+    R_LOAD_MEMBER,   // dst=reg, src1=obj_reg; metadata.string_operand=name; IC: ic_shape=Shape*/class*, ic_slot=field/getter_idx
+    R_STORE_MEMBER,  // src1=obj_reg, src2=value_reg; metadata.string_operand=name; IC: same as load_member_value/store_member_value
+    R_CALL_MEMBER,   // dst=reg, src1=obj_reg, src2=args_start, operand_a=argc; metadata.string_operand=name; IC: ic_shape=class*, ic_slot=method_idx
+    R_BUILD_STRUCT,  // dst=reg, src1=first_field_reg, operand_a=field_count; metadata.string_operand=type_name, metadata.names=field_names
+    R_BUILD_ARRAY,   // dst=reg, src1=first_elem_reg, operand_a=elem_count
+    R_LOAD_INDEX,    // dst=reg, src1=obj_reg, src2=index_reg
 };
 
 struct BytecodeFunction;
@@ -325,6 +340,75 @@ inline int unpack_r_jump_target_operand(int operand) {
     return unpack_r_index_operand(operand);
 }
 
+// R_LOAD_INT: encode small integer directly in instruction — (int24_value << 8) | dst
+// value range: -(1<<23) to (1<<23)-1
+inline bool try_pack_r_load_int_operand(std::uint8_t dst, std::int64_t value, int& packed_operand) {
+    if (value < -(std::int64_t(1) << 23) || value >= (std::int64_t(1) << 23)) return false;
+    const auto int_val = static_cast<std::int32_t>(value);
+    // Store value in bits[31:8], dst in bits[7:0]
+    packed_operand = static_cast<int>(
+        (static_cast<std::uint32_t>(int_val) << 8) | static_cast<std::uint32_t>(dst));
+    return true;
+}
+inline std::uint8_t unpack_r_load_int_dst(int operand) {
+    return static_cast<std::uint8_t>(operand & 0xFF);
+}
+inline std::int64_t unpack_r_load_int_value(int operand) {
+    return static_cast<std::int64_t>(static_cast<std::int32_t>(operand) >> 8);
+}
+
+// R_ADDI: dst = src + imm8 — encoding: (int8_imm << 16) | (src << 8) | dst
+// imm range: -128 to 127
+inline bool try_pack_r_addi_operand(std::uint8_t dst, std::uint8_t src, std::int64_t imm, int& packed_operand) {
+    if (imm < -128 || imm > 127) return false;
+    packed_operand = static_cast<int>(
+                     (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(imm))) << 16) |
+                     (static_cast<std::uint32_t>(src) << 8) |
+                     static_cast<std::uint32_t>(dst));
+    return true;
+}
+inline std::uint8_t unpack_r_addi_dst(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
+inline std::uint8_t unpack_r_addi_src(int operand) { return static_cast<std::uint8_t>((operand >> 8) & 0xFF); }
+inline std::int64_t unpack_r_addi_imm(int operand) { return static_cast<std::int64_t>(static_cast<std::int8_t>((operand >> 16) & 0xFF)); }
+
+// R_MODI: dst = src % imm8 — same encoding as R_ADDI, imm must be in [1, 127]
+inline bool try_pack_r_modi_operand(std::uint8_t dst, std::uint8_t src, std::int64_t imm, int& packed_operand) {
+    if (imm < 1 || imm > 127) return false;  // only positive non-zero immediates
+    packed_operand = static_cast<int>(
+                     (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(imm))) << 16) |
+                     (static_cast<std::uint32_t>(src) << 8) |
+                     static_cast<std::uint32_t>(dst));
+    return true;
+}
+inline std::uint8_t unpack_r_modi_dst(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
+inline std::uint8_t unpack_r_modi_src(int operand) { return static_cast<std::uint8_t>((operand >> 8) & 0xFF); }
+inline std::int64_t unpack_r_modi_imm(int operand) { return static_cast<std::int64_t>(static_cast<std::int8_t>((operand >> 16) & 0xFF)); }
+
+// R_SI_ADDI_CMPI_LT_JUMP: reg += addi; if (reg < limit) goto ic_slot else fall-through
+// encoding: (int16_limit << 16) | (int8_addi << 8) | reg  — body_start jump target in ic_slot
+inline bool try_pack_r_si_acj(std::uint8_t reg, std::int64_t addi, std::int64_t limit, int& packed) {
+    if (addi < -128 || addi > 127) return false;
+    if (limit < -32768 || limit > 32767) return false;
+    packed = static_cast<int>(
+             static_cast<std::uint32_t>(reg) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(addi))) << 8) |
+             (static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(limit))) << 16));
+    return true;
+}
+inline std::uint8_t unpack_r_si_acj_reg(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
+inline std::int64_t unpack_r_si_acj_addi(int operand) { return static_cast<std::int64_t>(static_cast<std::int8_t>((operand >> 8) & 0xFF)); }
+inline std::int64_t unpack_r_si_acj_limit(int operand) { return static_cast<std::int64_t>(static_cast<std::int16_t>(operand >> 16)); }
+
+// R_SI_LOOP_STEP: accum += iter%div; iter += step; if(iter<limit) goto body_start else fall-through
+// struct fields: dst=accum_reg, src1=step_imm(int8), src2=iter_reg, operand_a=div_imm(uint8)
+// ic_slot: low16=body_start(uint16), high16=limit(int16)
+inline std::size_t unpack_r_si_ls_body(std::uint32_t ic_slot) { return static_cast<std::size_t>(ic_slot & 0xFFFFu); }
+inline std::int64_t unpack_r_si_ls_limit(std::uint32_t ic_slot) { return static_cast<std::int64_t>(static_cast<std::int16_t>(static_cast<std::uint16_t>(ic_slot >> 16))); }
+inline std::uint32_t pack_r_si_ls_ic_slot(std::size_t body_start, std::int64_t limit) {
+    return (static_cast<std::uint32_t>(body_start) & 0xFFFFu) |
+           (static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(limit))) << 16);
+}
+
 // R_SPILL_LOAD / R_SPILL_STORE: (spill_idx << 8) | reg
 inline int pack_r_spill_operand(std::uint8_t reg, int spill_idx) {
     return (spill_idx << 8) | static_cast<int>(reg);
@@ -383,6 +467,35 @@ inline std::uint8_t unpack_r_si_cmp_jump_false_src2(int operand) {
 inline BytecodeOp unpack_r_si_cmp_jump_false_compare_op(int operand) {
     const auto kind = static_cast<SuperinstructionCompareKind>((static_cast<std::uint32_t>(operand) >> 16) & 0xFF);
     return register_bytecode_op_from_superinstruction_compare_kind(kind);
+}
+
+// R_SI_CMPI_JUMP_FALSE: compare register against inline int16 immediate, jump if false
+// encoding: (int16_imm << 16) | (kind << 8) | src1   — jump target in metadata[ip].jump_table[0]
+inline SuperinstructionCompareKind flip_r_si_compare_kind(SuperinstructionCompareKind kind) {
+    switch (kind) {
+        case SuperinstructionCompareKind::Less:         return SuperinstructionCompareKind::Greater;
+        case SuperinstructionCompareKind::LessEqual:    return SuperinstructionCompareKind::GreaterEqual;
+        case SuperinstructionCompareKind::Greater:      return SuperinstructionCompareKind::Less;
+        case SuperinstructionCompareKind::GreaterEqual: return SuperinstructionCompareKind::LessEqual;
+        case SuperinstructionCompareKind::Equal:        return SuperinstructionCompareKind::Equal;
+        case SuperinstructionCompareKind::NotEqual:     return SuperinstructionCompareKind::NotEqual;
+    }
+    return SuperinstructionCompareKind::Less;
+}
+inline bool try_pack_r_si_cmpi_jump_false_operand(std::uint8_t src1, std::int64_t imm, SuperinstructionCompareKind kind, int& packed) {
+    if (imm < -32768 || imm > 32767) return false;
+    packed = static_cast<int>(
+             static_cast<std::uint32_t>(src1) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(kind)) << 8) |
+             (static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(imm))) << 16));
+    return true;
+}
+inline std::uint8_t unpack_r_si_cmpi_jump_false_src1(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
+inline SuperinstructionCompareKind unpack_r_si_cmpi_jump_false_kind(int operand) {
+    return static_cast<SuperinstructionCompareKind>((operand >> 8) & 0xFF);
+}
+inline std::int64_t unpack_r_si_cmpi_jump_false_imm(int operand) {
+    return static_cast<std::int64_t>(static_cast<std::int16_t>(operand >> 16));
 }
 
 inline bool try_pack_r_si_load_add_store_operand(std::uint8_t dst, std::uint8_t local_src, int constant_index, int& packed_operand) {
@@ -603,6 +716,7 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_DIV: return "R_DIV";
         case BytecodeOp::R_MOD: return "R_MOD";
         case BytecodeOp::R_LOAD_CONST: return "R_LOAD_CONST";
+        case BytecodeOp::R_LOAD_INT: return "R_LOAD_INT";
         case BytecodeOp::R_LOAD_GLOBAL: return "R_LOAD_GLOBAL";
         case BytecodeOp::R_STORE_GLOBAL: return "R_STORE_GLOBAL";
         case BytecodeOp::R_MOVE: return "R_MOVE";
@@ -624,9 +738,22 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_SI_SUB_STORE: return "R_SI_SUB_STORE";
         case BytecodeOp::R_SI_MUL_STORE: return "R_SI_MUL_STORE";
         case BytecodeOp::R_SI_CMP_JUMP_FALSE: return "R_SI_CMP_JUMP_FALSE";
+        case BytecodeOp::R_SI_CMPI_JUMP_FALSE: return "R_SI_CMPI_JUMP_FALSE";
         case BytecodeOp::R_SI_LOAD_ADD_STORE: return "R_SI_LOAD_ADD_STORE";
+        case BytecodeOp::R_SI_MODI_ADD_STORE: return "R_SI_MODI_ADD_STORE";
+        case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP: return "R_SI_ADDI_CMPI_LT_JUMP";
+        case BytecodeOp::R_SI_LOOP_STEP: return "R_SI_LOOP_STEP";
         case BytecodeOp::R_SPILL_LOAD: return "R_SPILL_LOAD";
         case BytecodeOp::R_SPILL_STORE: return "R_SPILL_STORE";
+        case BytecodeOp::R_ADDI: return "R_ADDI";
+        case BytecodeOp::R_MODI: return "R_MODI";
+        case BytecodeOp::R_ADDI_JUMP: return "R_ADDI_JUMP";
+        case BytecodeOp::R_LOAD_MEMBER: return "R_LOAD_MEMBER";
+        case BytecodeOp::R_STORE_MEMBER: return "R_STORE_MEMBER";
+        case BytecodeOp::R_CALL_MEMBER: return "R_CALL_MEMBER";
+        case BytecodeOp::R_BUILD_STRUCT: return "R_BUILD_STRUCT";
+        case BytecodeOp::R_BUILD_ARRAY: return "R_BUILD_ARRAY";
+        case BytecodeOp::R_LOAD_INDEX: return "R_LOAD_INDEX";
     }
     return "Unknown";
 }
@@ -756,6 +883,7 @@ struct StructTypeObject final : GcObject {
     std::vector<StructFieldSpec> fields;
     std::unordered_map<std::string, Value> static_methods;    // TypeName::fn_name(args) — no self
     std::unordered_map<std::string, Value> instance_methods;  // m.fn_name(args) — with self
+    mutable Shape* cached_shape = nullptr;  // lazily populated by initialize_struct_instance
 };
 
 struct StructInstanceObject final : GcObject {
@@ -3583,11 +3711,64 @@ inline int recompute_register_max(const BytecodeFunction& function) {
                 note_reg(unpack_r_si_load_add_store_dst(instruction.operand));
                 note_reg(unpack_r_si_load_add_store_local_src(instruction.operand));
                 break;
+            case BytecodeOp::R_SI_MODI_ADD_STORE:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
+                note_reg(instruction.src2);
+                break;
+            case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
+                note_reg(unpack_r_si_acj_reg(instruction.operand));
+                break;
+            case BytecodeOp::R_SI_LOOP_STEP:
+                note_reg(instruction.dst);   // accum
+                note_reg(instruction.src2);  // iter
+                break;
+            case BytecodeOp::R_ADDI:
+            case BytecodeOp::R_ADDI_JUMP:
+                note_reg(unpack_r_addi_dst(instruction.operand));
+                note_reg(unpack_r_addi_src(instruction.operand));
+                break;
+            case BytecodeOp::R_MODI:
+                note_reg(unpack_r_modi_dst(instruction.operand));
+                note_reg(unpack_r_modi_src(instruction.operand));
+                break;
             case BytecodeOp::R_SPILL_LOAD:
                 note_reg(unpack_r_spill_reg(instruction.operand));
                 break;
             case BytecodeOp::R_SPILL_STORE:
                 note_reg(unpack_r_spill_reg(instruction.operand));
+                break;
+            case BytecodeOp::R_LOAD_MEMBER:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
+                break;
+            case BytecodeOp::R_STORE_MEMBER:
+                note_reg(instruction.src1);
+                note_reg(instruction.src2);
+                break;
+            case BytecodeOp::R_CALL_MEMBER:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
+                for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
+                    note_reg(static_cast<int>(instruction.src2) + index);
+                }
+                break;
+            case BytecodeOp::R_BUILD_STRUCT:
+                note_reg(instruction.dst);
+                for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
+                    note_reg(static_cast<int>(instruction.src1) + index);
+                }
+                break;
+            case BytecodeOp::R_BUILD_ARRAY:
+                note_reg(instruction.dst);
+                for (std::uint8_t index = 0; index < instruction.operand_a; ++index) {
+                    note_reg(static_cast<int>(instruction.src1) + index);
+                }
+                break;
+            case BytecodeOp::R_LOAD_INDEX:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
+                note_reg(instruction.src2);
                 break;
             default:
                 break;
@@ -3660,6 +3841,142 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
                 continue;
             }
 
+            // R_MODI(tmp, src, imm) + R_MOVE(dst, tmp) → R_MODI(dst, src, imm)
+            if (code[i].op == BytecodeOp::R_MODI &&
+                code[j].op == BytecodeOp::R_MOVE &&
+                code[j].src1 == unpack_r_modi_dst(code[i].operand)) {
+                const std::uint8_t new_dst = code[j].dst;
+                const std::uint8_t src      = unpack_r_modi_src(code[i].operand);
+                const std::int64_t imm      = unpack_r_modi_imm(code[i].operand);
+                int packed = 0;
+                if (try_pack_r_modi_operand(new_dst, src, imm, packed)) {
+                    code[i].operand = packed;
+                    metadata[i] = metadata[j];
+                    deleted[j] = true;
+                    ++func->superinstruction_fusions;
+                    changed = true;
+                    continue;
+                }
+            }
+
+            // R_ADDI(dst, src, imm) + R_JUMP(target) → R_ADDI_JUMP: add then unconditionally jump
+            // Jump target stored inline in ic_slot to avoid heap-allocated metadata vector access.
+            if (code[i].op == BytecodeOp::R_ADDI &&
+                code[j].op == BytecodeOp::R_JUMP &&
+                code[j].operand >= 0) {
+                code[i].op = BytecodeOp::R_ADDI_JUMP;
+                code[i].ic_slot = static_cast<std::uint32_t>(code[j].operand);
+                deleted[j] = true;
+                ++func->superinstruction_fusions;
+                changed = true;
+                continue;
+            }
+
+            // R_ADDI(tmp, src, imm) + R_MOVE(dst, tmp) → R_ADDI(dst, src, imm)
+            if (code[i].op == BytecodeOp::R_ADDI &&
+                code[j].op == BytecodeOp::R_MOVE &&
+                code[j].src1 == unpack_r_addi_dst(code[i].operand)) {
+                const std::uint8_t new_dst = code[j].dst;
+                const std::uint8_t src      = unpack_r_addi_src(code[i].operand);
+                const std::int64_t imm      = unpack_r_addi_imm(code[i].operand);
+                int packed = 0;
+                if (try_pack_r_addi_operand(new_dst, src, imm, packed)) {
+                    code[i].operand = packed;
+                    metadata[i] = metadata[j];
+                    deleted[j] = true;
+                    ++func->superinstruction_fusions;
+                    changed = true;
+                    continue;
+                }
+            }
+
+            // R_ADDI_JUMP(reg, +N) → target R_SI_CMPI_JUMP_FALSE(reg, limit, Less) → R_SI_ADDI_CMPI_LT_JUMP
+            // Non-adjacent back-edge fusion: increment + compare + conditional jump in one instruction.
+            // Safety: only fuse when CMPI exit target equals ADDI_JUMP fall-through (i+1) so the
+            // fall-through after the new instruction naturally reaches the loop exit.
+            if (code[i].op == BytecodeOp::R_ADDI_JUMP) {
+                const std::size_t target = static_cast<std::size_t>(code[i].ic_slot);
+                if (target < code.size() && !deleted[target] &&
+                    code[target].op == BytecodeOp::R_SI_CMPI_JUMP_FALSE) {
+                    const std::uint8_t addi_reg = unpack_r_addi_dst(code[i].operand);
+                    const std::int64_t addi_imm = unpack_r_addi_imm(code[i].operand);
+                    const std::uint8_t cmpi_reg = unpack_r_si_cmpi_jump_false_src1(code[target].operand);
+                    const std::int64_t cmpi_limit = unpack_r_si_cmpi_jump_false_imm(code[target].operand);
+                    const auto cmpi_kind = unpack_r_si_cmpi_jump_false_kind(code[target].operand);
+                    const bool exit_matches = !metadata[target].jump_table.empty() &&
+                        static_cast<std::size_t>(metadata[target].jump_table.front()) == i + 1;
+                    if (addi_reg == cmpi_reg &&
+                        cmpi_kind == SuperinstructionCompareKind::Less &&
+                        exit_matches) {
+                        int packed = 0;
+                        if (try_pack_r_si_acj(addi_reg, addi_imm, cmpi_limit, packed)) {
+                            // body_start is the instruction after the CMPI (target+1, pre-remap)
+                            const std::size_t body_start = target + 1;
+                            code[i].op = BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP;
+                            code[i].operand = packed;
+                            code[i].ic_slot = static_cast<std::uint32_t>(body_start);
+                            deleted[target] = true;
+                            ++func->superinstruction_fusions;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // R_MODI(tmp, src2, imm) + R_SI_ADD_STORE(dst, src1, tmp) → R_SI_MODI_ADD_STORE(dst, src1, src2, imm)
+            // Also handles commuted case: R_SI_ADD_STORE(dst, tmp, src2_acc)
+            if (code[i].op == BytecodeOp::R_MODI &&
+                code[j].op == BytecodeOp::R_SI_ADD_STORE) {
+                const std::uint8_t modi_tmp = unpack_r_modi_dst(code[i].operand);
+                const std::uint8_t modi_src = unpack_r_modi_src(code[i].operand);
+                const std::int64_t modi_imm = unpack_r_modi_imm(code[i].operand);
+                if (modi_imm >= 1 && modi_imm <= 255) {
+                    std::uint8_t accum = 0;
+                    bool fuse = false;
+                    if (code[j].src2 == modi_tmp) { accum = code[j].src1; fuse = true; }
+                    else if (code[j].src1 == modi_tmp) { accum = code[j].src2; fuse = true; }
+                    if (fuse) {
+                        const std::uint8_t fused_dst = code[j].dst;
+                        code[i].op = BytecodeOp::R_SI_MODI_ADD_STORE;
+                        code[i].dst = fused_dst;
+                        code[i].src1 = accum;
+                        code[i].src2 = modi_src;
+                        code[i].operand_a = static_cast<std::uint8_t>(modi_imm);
+                        metadata[i] = metadata[j];
+                        deleted[j] = true;
+                        ++func->superinstruction_fusions;
+                        changed = true;
+                        continue;
+                    }
+                }
+            }
+
+            // R_SI_MODI_ADD_STORE(accum, accum, iter, div) + R_SI_ADDI_CMPI_LT_JUMP(iter, step, limit) →
+            // R_SI_LOOP_STEP(accum, step, iter, div, limit, body_start)
+            // Condition: MODI_ADD_STORE self-accumulates (dst==src1), same iter register, body_start fits uint16
+            if (code[i].op == BytecodeOp::R_SI_MODI_ADD_STORE &&
+                code[j].op == BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP &&
+                code[i].dst == code[i].src1) {
+                const std::uint8_t ls_iter = code[i].src2;
+                // operand_a (div_imm) and src2 (iter_reg) are preserved unchanged in the fused instruction
+                const std::uint8_t acj_reg   = unpack_r_si_acj_reg(code[j].operand);
+                const std::int64_t acj_step  = unpack_r_si_acj_addi(code[j].operand);
+                const std::int64_t acj_limit = unpack_r_si_acj_limit(code[j].operand);
+                const std::size_t  acj_body  = static_cast<std::size_t>(code[j].ic_slot);
+                if (ls_iter == acj_reg && acj_body <= 0xFFFFu) {
+                    code[i].op = BytecodeOp::R_SI_LOOP_STEP;
+                    // dst = accum_reg (unchanged), src2 = iter_reg (unchanged), operand_a = div_imm (unchanged)
+                    code[i].src1 = static_cast<std::uint8_t>(static_cast<std::int8_t>(acj_step));
+                    code[i].ic_slot = pack_r_si_ls_ic_slot(acj_body, acj_limit);
+                    metadata[i] = metadata[j];
+                    deleted[j] = true;
+                    ++func->superinstruction_fusions;
+                    changed = true;
+                    continue;
+                }
+            }
+
             if (is_register_comparison_op(code[i].op) &&
                 code[j].op == BytecodeOp::R_JUMP_IF_FALSE &&
                 unpack_r_src_operand(code[j].operand) == code[i].dst) {
@@ -3674,6 +3991,43 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
                     changed = true;
                     continue;
                 }
+            }
+
+            // R_LOAD_INT(tmp, imm) + R_SI_CMP_JUMP_FALSE → R_SI_CMPI_JUMP_FALSE
+            if (code[i].op == BytecodeOp::R_LOAD_INT &&
+                code[j].op == BytecodeOp::R_SI_CMP_JUMP_FALSE) {
+                const std::uint8_t li_dst  = unpack_r_load_int_dst(code[i].operand);
+                const std::int64_t li_imm  = unpack_r_load_int_value(code[i].operand);
+                const std::uint8_t cj_src1 = unpack_r_si_cmp_jump_false_src1(code[j].operand);
+                const std::uint8_t cj_src2 = unpack_r_si_cmp_jump_false_src2(code[j].operand);
+                const auto cj_kind = static_cast<SuperinstructionCompareKind>(
+                    (static_cast<std::uint32_t>(code[j].operand) >> 16) & 0xFF);
+                bool replaced = false;
+                if (cj_src2 == li_dst) {
+                    // right operand was the immediate — kind unchanged
+                    int packed = 0;
+                    if (try_pack_r_si_cmpi_jump_false_operand(cj_src1, li_imm, cj_kind, packed)) {
+                        code[j].op = BytecodeOp::R_SI_CMPI_JUMP_FALSE;
+                        code[j].operand = packed;
+                        deleted[i] = true;
+                        ++func->superinstruction_fusions;
+                        changed = true;
+                        replaced = true;
+                    }
+                } else if (cj_src1 == li_dst) {
+                    // left operand was the immediate — flip kind
+                    const auto flipped = flip_r_si_compare_kind(cj_kind);
+                    int packed = 0;
+                    if (try_pack_r_si_cmpi_jump_false_operand(cj_src2, li_imm, flipped, packed)) {
+                        code[j].op = BytecodeOp::R_SI_CMPI_JUMP_FALSE;
+                        code[j].operand = packed;
+                        deleted[i] = true;
+                        ++func->superinstruction_fusions;
+                        changed = true;
+                        replaced = true;
+                    }
+                }
+                if (replaced) continue;
             }
 
             if (k < code.size() &&
@@ -3737,11 +4091,27 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
             }
             continue;
         }
-        if (code[i].op == BytecodeOp::R_SI_CMP_JUMP_FALSE &&
+        if ((code[i].op == BytecodeOp::R_SI_CMP_JUMP_FALSE ||
+             code[i].op == BytecodeOp::R_SI_CMPI_JUMP_FALSE) &&
             !metadata[i].jump_table.empty() &&
             metadata[i].jump_table.front() >= 0 &&
             static_cast<std::size_t>(metadata[i].jump_table.front()) < index_map.size()) {
             metadata[i].jump_table.front() = index_map[static_cast<std::size_t>(metadata[i].jump_table.front())];
+        }
+        if (code[i].op == BytecodeOp::R_ADDI_JUMP &&
+            static_cast<std::size_t>(code[i].ic_slot) < index_map.size()) {
+            code[i].ic_slot = static_cast<std::uint32_t>(index_map[static_cast<std::size_t>(code[i].ic_slot)]);
+        }
+        if (code[i].op == BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP &&
+            static_cast<std::size_t>(code[i].ic_slot) < index_map.size()) {
+            code[i].ic_slot = static_cast<std::uint32_t>(index_map[static_cast<std::size_t>(code[i].ic_slot)]);
+        }
+        if (code[i].op == BytecodeOp::R_SI_LOOP_STEP) {
+            const std::size_t old_body = unpack_r_si_ls_body(code[i].ic_slot);
+            if (old_body < index_map.size()) {
+                const std::uint32_t limit_bits = code[i].ic_slot & 0xFFFF0000u;
+                code[i].ic_slot = (static_cast<std::uint32_t>(index_map[old_body]) & 0xFFFFu) | limit_bits;
+            }
         }
     }
 
@@ -4536,6 +4906,54 @@ private:
         ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_LOAD_CONST)];
     }
 
+    void emit_r_load_int(const Span& span, std::uint8_t dst, std::int64_t value) {
+        int packed_operand = 0;
+        if (!try_pack_r_load_int_operand(dst, value, packed_operand)) {
+            register_compile_failed_ = true;
+            return;
+        }
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_LOAD_INT;
+        instruction.operand = packed_operand;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(std::move(instruction));
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_LOAD_INT)];
+    }
+
+    void emit_r_addi(const Span& span, std::uint8_t dst, std::uint8_t src, std::int64_t imm) {
+        int packed_operand = 0;
+        if (!try_pack_r_addi_operand(dst, src, imm, packed_operand)) {
+            register_compile_failed_ = true;
+            return;
+        }
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_ADDI;
+        instruction.operand = packed_operand;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(std::move(instruction));
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_ADDI)];
+    }
+
+    void emit_r_modi(const Span& span, std::uint8_t dst, std::uint8_t src, std::int64_t imm) {
+        int packed_operand = 0;
+        if (!try_pack_r_modi_operand(dst, src, imm, packed_operand)) {
+            register_compile_failed_ = true;
+            return;
+        }
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_MODI;
+        instruction.operand = packed_operand;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(std::move(instruction));
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_MODI)];
+    }
+
     void emit_r_load_global(const Span& span, std::uint8_t dst, int global_slot) {
         int packed_operand = 0;
         if (!try_pack_r_dst_index_operand(dst, global_slot, packed_operand)) {
@@ -4594,6 +5012,94 @@ private:
         function_->metadata.emplace_back();
         function_->line_table.push_back(span.line);
         ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_SPILL_STORE)];
+    }
+
+    void emit_r_load_member(const Span& span, std::uint8_t dst, std::uint8_t obj_reg, const std::string& member) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_LOAD_MEMBER;
+        instruction.dst = dst;
+        instruction.src1 = obj_reg;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        InstructionMetadata meta;
+        meta.string_operand = member;
+        function_->metadata.push_back(std::move(meta));
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_LOAD_MEMBER)];
+    }
+
+    void emit_r_store_member(const Span& span, std::uint8_t obj_reg, std::uint8_t value_reg, const std::string& member) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_STORE_MEMBER;
+        instruction.src1 = obj_reg;
+        instruction.src2 = value_reg;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        InstructionMetadata meta;
+        meta.string_operand = member;
+        function_->metadata.push_back(std::move(meta));
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_STORE_MEMBER)];
+    }
+
+    void emit_r_call_member(const Span& span, std::uint8_t dst, std::uint8_t obj_reg,
+                            std::uint8_t args_start, std::uint8_t argc, const std::string& member) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_CALL_MEMBER;
+        instruction.dst = dst;
+        instruction.src1 = obj_reg;
+        instruction.src2 = args_start;
+        instruction.operand_a = argc;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        InstructionMetadata meta;
+        meta.string_operand = member;
+        function_->metadata.push_back(std::move(meta));
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_CALL_MEMBER)];
+    }
+
+    void emit_r_build_struct(const Span& span, std::uint8_t dst, std::uint8_t first_field_reg,
+                             std::uint8_t field_count, const std::string& type_name, std::vector<std::string> field_names) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_BUILD_STRUCT;
+        instruction.dst = dst;
+        instruction.src1 = first_field_reg;
+        instruction.operand_a = field_count;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        InstructionMetadata meta;
+        meta.string_operand = type_name;
+        meta.names = std::move(field_names);
+        function_->metadata.push_back(std::move(meta));
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_BUILD_STRUCT)];
+    }
+
+    void emit_r_build_array(const Span& span, std::uint8_t dst, std::uint8_t first_elem_reg, std::uint8_t elem_count) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_BUILD_ARRAY;
+        instruction.dst = dst;
+        instruction.src1 = first_elem_reg;
+        instruction.operand_a = elem_count;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_BUILD_ARRAY)];
+    }
+
+    void emit_r_load_index(const Span& span, std::uint8_t dst, std::uint8_t obj_reg, std::uint8_t idx_reg) {
+        CompactInstruction instruction;
+        instruction.op = BytecodeOp::R_LOAD_INDEX;
+        instruction.dst = dst;
+        instruction.src1 = obj_reg;
+        instruction.src2 = idx_reg;
+        instruction.span_line = static_cast<std::uint32_t>(std::max<std::size_t>(1, span.line));
+        function_->instructions.push_back(instruction);
+        function_->metadata.emplace_back();
+        function_->line_table.push_back(span.line);
+        ++function_->opcode_histogram[bytecode_op_name(BytecodeOp::R_LOAD_INDEX)];
     }
 
     std::string make_temp_name(const char* prefix) {
@@ -4847,9 +5353,39 @@ private:
             fail_register_compile();
             return 0;
         }
-        if (dynamic_cast<MemberExpr*>(call->callee.get()) != nullptr) {
-            fail_register_compile();
-            return 0;
+        if (auto* member_callee = dynamic_cast<MemberExpr*>(call->callee.get())) {
+            const auto obj_reg = compile_expr_r(member_callee->object.get());
+            if (!obj_reg.has_value()) return 0;
+
+            std::vector<std::uint8_t> member_args;
+            member_args.reserve(call->arguments.size());
+            for (auto& argument : call->arguments) {
+                const auto arg_reg = compile_expr_r(argument.get());
+                if (!arg_reg.has_value()) {
+                    register_allocator_.free_temp(*obj_reg);
+                    return 0;
+                }
+                member_args.push_back(*arg_reg);
+            }
+
+            std::uint8_t member_args_start = 0;
+            if (!member_args.empty()) {
+                member_args_start = register_allocator_.alloc_temp_block(member_args.size());
+                for (std::size_t index = 0; index < member_args.size(); ++index) {
+                    emit_r(BytecodeOp::R_MOVE, call->span,
+                           static_cast<std::uint8_t>(member_args_start + index), member_args[index]);
+                }
+            }
+
+            const std::uint8_t member_dst = register_allocator_.alloc_temp();
+            emit_r_call_member(call->span, member_dst, *obj_reg,
+                               member_args_start, static_cast<std::uint8_t>(call->arguments.size()),
+                               member_callee->member);
+
+            for (std::uint8_t arg : member_args) register_allocator_.free_temp(arg);
+            if (!member_args.empty()) register_allocator_.free_temp_block(member_args_start, member_args.size());
+            register_allocator_.free_temp(*obj_reg);
+            return member_dst;
         }
 
         const auto callee_reg = compile_expr_r(call->callee.get());
@@ -4925,7 +5461,17 @@ private:
             std::visit(
                 [&](const auto& value) {
                     using T = std::decay_t<decltype(value)>;
-                    if constexpr (std::is_same_v<T, std::monostate>) {
+                    if constexpr (std::is_same_v<T, std::int64_t>) {
+                        // Use R_LOAD_INT for non-cached integers to avoid constant pool lookup.
+                        // Cached integers (literal_key set, [-1,16]) keep R_LOAD_CONST so that
+                        // the R_SI_LOAD_ADD_STORE superinstruction fusion can still fire.
+                        int packed = 0;
+                        if (!literal_key.has_value() && try_pack_r_load_int_operand(reg, value, packed)) {
+                            emit_r_load_int(expr->span, reg, value);
+                        } else {
+                            emit_r_load_const(expr->span, reg, add_constant(BytecodeConstant{value}));
+                        }
+                    } else if constexpr (std::is_same_v<T, std::monostate>) {
                         emit_r_load_const(expr->span, reg, add_constant(BytecodeConstant{std::monostate{}}));
                     } else {
                         emit_r_load_const(expr->span, reg, add_constant(BytecodeConstant{value}));
@@ -4989,6 +5535,51 @@ private:
                 return dst;
             }
 
+            // R_ADDI fast path: integer literal operand in [-128,127] for + or -
+            if (binary->op == TokenType::Plus || binary->op == TokenType::Minus) {
+                auto get_int_literal = [](Expr* e) -> const std::int64_t* {
+                    auto* lit = dynamic_cast<LiteralExpr*>(e);
+                    if (!lit) return nullptr;
+                    return std::get_if<std::int64_t>(&lit->value);
+                };
+                const std::int64_t* right_iv = get_int_literal(binary->right.get());
+                const std::int64_t* left_iv  = (binary->op == TokenType::Plus) ? get_int_literal(binary->left.get()) : nullptr;
+                const std::int64_t* imm_iv   = right_iv ? right_iv : left_iv;
+                Expr* reg_expr               = right_iv ? binary->left.get() : (left_iv ? binary->right.get() : nullptr);
+                if (imm_iv && reg_expr) {
+                    const std::int64_t imm = (binary->op == TokenType::Minus) ? -(*imm_iv) : *imm_iv;
+                    int packed = 0;
+                    if (imm >= -128 && imm <= 127) {
+                        const auto reg_src = compile_expr_r(reg_expr);
+                        if (reg_src.has_value()) {
+                            const std::uint8_t addi_dst = register_allocator_.alloc_temp();
+                            emit_r_addi(binary->span, addi_dst, *reg_src, imm);
+                            register_allocator_.free_temp(*reg_src);
+                            (void)packed;
+                            return register_compile_failed_ ? std::nullopt : std::optional<std::uint8_t>(addi_dst);
+                        }
+                    }
+                }
+            }
+
+            // R_MODI fast path: a % literal where literal is in [1,127]
+            if (binary->op == TokenType::Percent) {
+                auto* lit = dynamic_cast<LiteralExpr*>(binary->right.get());
+                if (lit) {
+                    if (const auto* iv = std::get_if<std::int64_t>(&lit->value)) {
+                        if (*iv >= 1 && *iv <= 127) {
+                            const auto reg_src = compile_expr_r(binary->left.get());
+                            if (reg_src.has_value()) {
+                                const std::uint8_t modi_dst = register_allocator_.alloc_temp();
+                                emit_r_modi(binary->span, modi_dst, *reg_src, *iv);
+                                register_allocator_.free_temp(*reg_src);
+                                return register_compile_failed_ ? std::nullopt : std::optional<std::uint8_t>(modi_dst);
+                            }
+                        }
+                    }
+                }
+            }
+
             const auto left = compile_expr_r(binary->left.get());
             const auto right = compile_expr_r(binary->right.get());
             if (!left.has_value() || !right.has_value()) {
@@ -5019,6 +5610,25 @@ private:
             return register_compile_failed_ ? std::nullopt : std::optional<std::uint8_t>(dst);
         }
         if (auto* assign = dynamic_cast<AssignExpr*>(expr)) {
+            // R_STORE_MEMBER: obj.member = value  (simple assignment only)
+            if (auto* member_target = dynamic_cast<MemberExpr*>(assign->target.get())) {
+                if (assign->assignment_op != TokenType::Equal) {
+                    fail_register_compile();
+                    return std::nullopt;
+                }
+                const auto obj_reg = compile_expr_r(member_target->object.get());
+                if (!obj_reg.has_value()) return std::nullopt;
+                const auto val_reg = compile_expr_r(assign->value.get());
+                if (!val_reg.has_value()) {
+                    register_allocator_.free_temp(*obj_reg);
+                    return std::nullopt;
+                }
+                emit_r_store_member(assign->span, *obj_reg, *val_reg, member_target->member);
+                register_allocator_.free_temp(*obj_reg);
+                // val_reg remains live as the expression result (assignment yields the value)
+                return val_reg;
+            }
+
             auto* variable = dynamic_cast<VariableExpr*>(assign->target.get());
             if (variable == nullptr) {
                 fail_register_compile();
@@ -5079,6 +5689,84 @@ private:
         if (auto* call = dynamic_cast<CallExpr*>(expr)) {
             return compile_call_r(call);
         }
+        if (auto* member = dynamic_cast<MemberExpr*>(expr)) {
+            const auto obj_reg = compile_expr_r(member->object.get());
+            if (!obj_reg.has_value()) return std::nullopt;
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r_load_member(member->span, dst, *obj_reg, member->member);
+            register_allocator_.free_temp(*obj_reg);
+            return dst;
+        }
+
+        if (auto* array = dynamic_cast<ArrayExpr*>(expr)) {
+            const std::size_t elem_count = array->elements.size();
+            std::vector<std::uint8_t> elem_regs;
+            elem_regs.reserve(elem_count);
+            for (auto& element : array->elements) {
+                const auto elem_reg = compile_expr_r(element.get());
+                if (!elem_reg.has_value()) {
+                    for (std::uint8_t r : elem_regs) register_allocator_.free_temp(r);
+                    return std::nullopt;
+                }
+                elem_regs.push_back(*elem_reg);
+            }
+            std::uint8_t base_reg = 0;
+            if (elem_count > 0) {
+                base_reg = register_allocator_.alloc_temp_block(elem_count);
+                for (std::size_t i = 0; i < elem_count; ++i) {
+                    emit_r(BytecodeOp::R_MOVE, array->span,
+                           static_cast<std::uint8_t>(base_reg + i), elem_regs[i]);
+                }
+            }
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r_build_array(array->span, dst, base_reg, static_cast<std::uint8_t>(elem_count));
+            for (std::uint8_t r : elem_regs) register_allocator_.free_temp(r);
+            if (elem_count > 0) register_allocator_.free_temp_block(base_reg, elem_count);
+            return dst;
+        }
+
+        if (auto* struct_init = dynamic_cast<StructInitExpr*>(expr)) {
+            const std::size_t field_count = struct_init->fields.size();
+            std::vector<std::uint8_t> field_regs;
+            std::vector<std::string> field_names;
+            field_regs.reserve(field_count);
+            field_names.reserve(field_count);
+            for (auto& field : struct_init->fields) {
+                const auto field_reg = compile_expr_r(field.value.get());
+                if (!field_reg.has_value()) {
+                    for (std::uint8_t r : field_regs) register_allocator_.free_temp(r);
+                    return std::nullopt;
+                }
+                field_regs.push_back(*field_reg);
+                field_names.push_back(field.name);
+            }
+            std::uint8_t base_reg = 0;
+            if (field_count > 0) {
+                base_reg = register_allocator_.alloc_temp_block(field_count);
+                for (std::size_t i = 0; i < field_count; ++i) {
+                    emit_r(BytecodeOp::R_MOVE, struct_init->span,
+                           static_cast<std::uint8_t>(base_reg + i), field_regs[i]);
+                }
+            }
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r_build_struct(struct_init->span, dst, base_reg, static_cast<std::uint8_t>(field_count),
+                                struct_init->type_name.display_name(), std::move(field_names));
+            for (std::uint8_t r : field_regs) register_allocator_.free_temp(r);
+            if (field_count > 0) register_allocator_.free_temp_block(base_reg, field_count);
+            return dst;
+        }
+
+        if (auto* index_expr = dynamic_cast<IndexExpr*>(expr)) {
+            const auto obj_reg = compile_expr_r(index_expr->object.get());
+            if (!obj_reg.has_value()) return std::nullopt;
+            const auto idx_reg = compile_expr_r(index_expr->index.get());
+            if (!idx_reg.has_value()) { register_allocator_.free_temp(*obj_reg); return std::nullopt; }
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r_load_index(index_expr->span, dst, *obj_reg, *idx_reg);
+            register_allocator_.free_temp(*obj_reg);
+            register_allocator_.free_temp(*idx_reg);
+            return dst;
+        }
 
         fail_register_compile();
         return std::nullopt;
@@ -5108,6 +5796,17 @@ private:
                 if (*value_reg != dst) {
                     emit_r(BytecodeOp::R_MOVE, let_stmt->span, dst, *value_reg);
                     register_allocator_.free_temp(*value_reg);
+                } else if (let_stmt->mutable_value) {
+                    // The cached persistent literal register coincides with the local slot.
+                    // For mutable variables the register will be overwritten later, so evict
+                    // any cached literal entry that points here to prevent stale literal reads.
+                    for (auto it = cached_literal_regs_.begin(); it != cached_literal_regs_.end(); ) {
+                        if (it->second == dst) {
+                            it = cached_literal_regs_.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
                 }
             } else {
                 // spill slot — store RHS into spill memory

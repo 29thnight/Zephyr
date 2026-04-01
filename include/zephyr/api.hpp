@@ -253,19 +253,32 @@ public:
     const Getter* find_getter(const std::string& name) const;
     const Setter* find_setter(const std::string& name) const;
 
+    // IC-indexed lookup: on hit returns pointer and writes out_index for caching.
+    const Method* find_method_ic(const std::string& name, std::uint32_t& out_index) const;
+    const Getter* find_getter_ic(const std::string& name, std::uint32_t& out_index) const;
+    const Method* get_method_at(std::uint32_t index) const;
+    const Getter* get_getter_at(std::uint32_t index) const;
+
     ZephyrValue invoke(void* instance, const std::string& method_name, const std::vector<ZephyrValue>& args) const;
     ZephyrValue get(void* instance, const std::string& property_name) const;
     void set(void* instance, const std::string& property_name, const ZephyrValue& value) const;
 
 private:
-    struct Property {
+    struct IndexedMethod {
+        std::string name;
+        Method fn;
+    };
+    struct IndexedProperty {
+        std::string name;
         Getter getter;
         Setter setter;
     };
 
     std::string name_;
-    std::unordered_map<std::string, Method> methods_;
-    std::unordered_map<std::string, Property> properties_;
+    std::vector<IndexedMethod> methods_list_;
+    std::unordered_map<std::string, std::uint32_t> methods_index_;
+    std::vector<IndexedProperty> properties_list_;
+    std::unordered_map<std::string, std::uint32_t> properties_index_;
 };
 
 struct ZephyrFunctionHandle {
