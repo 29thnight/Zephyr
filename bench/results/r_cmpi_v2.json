@@ -1,9 +1,9 @@
 {
   "generated_at_utc": "2026-03-31T06:05:16Z",
-  "workspace_root": "C:\\Users\\idene\\Zephyr\\.claude\\worktrees\\quizzical-pike",
-  "output_path": "bench\\results\\r_cmpi_v2.json",
-  "baseline_path": "C:\\Users\\idene\\Zephyr\\.claude\\worktrees\\quizzical-pike\\bench\\results\\v1_baseline.json",
-  "baseline_loaded": true,
+  
+  
+  
+  
   "strict_gates": false,
   "all_required_gates_passed": true,
   "passed_gates": 5,

@@ -361,9 +361,10 @@ inline std::int64_t unpack_r_load_int_value(int operand) {
 // imm range: -128 to 127
 inline bool try_pack_r_addi_operand(std::uint8_t dst, std::uint8_t src, std::int64_t imm, int& packed_operand) {
     if (imm < -128 || imm > 127) return false;
-    packed_operand = (static_cast<int>(static_cast<std::int8_t>(imm)) << 16) |
-                     (static_cast<int>(src) << 8) |
-                     static_cast<int>(dst);
+    packed_operand = static_cast<int>(
+                     (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(imm))) << 16) |
+                     (static_cast<std::uint32_t>(src) << 8) |
+                     static_cast<std::uint32_t>(dst));
     return true;
 }
 inline std::uint8_t unpack_r_addi_dst(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
@@ -373,9 +374,10 @@ inline std::int64_t unpack_r_addi_imm(int operand) { return static_cast<std::int
 // R_MODI: dst = src % imm8 — same encoding as R_ADDI, imm must be in [1, 127]
 inline bool try_pack_r_modi_operand(std::uint8_t dst, std::uint8_t src, std::int64_t imm, int& packed_operand) {
     if (imm < 1 || imm > 127) return false;  // only positive non-zero immediates
-    packed_operand = (static_cast<int>(static_cast<std::int8_t>(imm)) << 16) |
-                     (static_cast<int>(src) << 8) |
-                     static_cast<int>(dst);
+    packed_operand = static_cast<int>(
+                     (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(imm))) << 16) |
+                     (static_cast<std::uint32_t>(src) << 8) |
+                     static_cast<std::uint32_t>(dst));
     return true;
 }
 inline std::uint8_t unpack_r_modi_dst(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
@@ -387,9 +389,10 @@ inline std::int64_t unpack_r_modi_imm(int operand) { return static_cast<std::int
 inline bool try_pack_r_si_acj(std::uint8_t reg, std::int64_t addi, std::int64_t limit, int& packed) {
     if (addi < -128 || addi > 127) return false;
     if (limit < -32768 || limit > 32767) return false;
-    packed = static_cast<int>(reg) |
-             ((static_cast<int>(static_cast<std::int8_t>(addi)) & 0xFF) << 8) |
-             (static_cast<std::int32_t>(static_cast<std::int16_t>(limit)) << 16);
+    packed = static_cast<int>(
+             static_cast<std::uint32_t>(reg) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(static_cast<std::int8_t>(addi))) << 8) |
+             (static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(limit))) << 16));
     return true;
 }
 inline std::uint8_t unpack_r_si_acj_reg(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
@@ -481,9 +484,10 @@ inline SuperinstructionCompareKind flip_r_si_compare_kind(SuperinstructionCompar
 }
 inline bool try_pack_r_si_cmpi_jump_false_operand(std::uint8_t src1, std::int64_t imm, SuperinstructionCompareKind kind, int& packed) {
     if (imm < -32768 || imm > 32767) return false;
-    packed = static_cast<int>(src1) |
-             (static_cast<int>(static_cast<std::uint8_t>(kind)) << 8) |
-             (static_cast<std::int32_t>(static_cast<std::int16_t>(imm)) << 16);
+    packed = static_cast<int>(
+             static_cast<std::uint32_t>(src1) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(kind)) << 8) |
+             (static_cast<std::uint32_t>(static_cast<std::uint16_t>(static_cast<std::int16_t>(imm))) << 16));
     return true;
 }
 inline std::uint8_t unpack_r_si_cmpi_jump_false_src1(int operand) { return static_cast<std::uint8_t>(operand & 0xFF); }
