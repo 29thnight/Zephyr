@@ -2369,6 +2369,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         Environment* call_env;
         const std::string* module_name;
         Environment* module_env;
+        const std::vector<UpvalueCellObject*>* upvalues;
     };
     std::vector<RegCallFrame> iterative_call_stack_;
     iterative_call_stack_.reserve(64);
@@ -2380,6 +2381,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     Environment* active_module_env = module.environment;
     std::size_t active_reg_base = reg_base;
     std::size_t active_reg_count = reg_count;
+    const std::vector<UpvalueCellObject*>* active_upvalues = captured_upvalues;
 
     auto register_index = [&](std::uint8_t reg, const Span& span) -> RuntimeResult<std::size_t> {
         if (static_cast<std::size_t>(reg) >= active_reg_count) {
@@ -3040,7 +3042,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                             //       call_env/module_env save (all identical for same function)
                             iterative_call_stack_.push_back({
                                 ip + 1, active_reg_base, active_reg_count, dst,
-                                nullptr, nullptr, nullptr, nullptr
+                                nullptr, nullptr, nullptr, nullptr, nullptr
                             });
                             active_reg_base = register_sp_;
                             register_sp_ += active_reg_count;  // same reg count
@@ -3058,10 +3060,12 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                         // ── Different-function call ──
                         iterative_call_stack_.push_back({
                             ip + 1, active_reg_base, active_reg_count, dst,
-                            active_chunk, active_call_env, active_module_name, active_module_env
+                            active_chunk, active_call_env, active_module_name, active_module_env,
+                            active_upvalues
                         });
                         active_chunk = function->bytecode.get();
                         active_call_env = function->closure;
+                        active_upvalues = &function->captured_upvalues;
                         active_module_env = function->closure;
                         instructions_ptr = active_chunk->instructions.data();
                         metadata_ptr = active_chunk->metadata.data();
@@ -3245,10 +3249,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_LOAD_UPVALUE: {
                 const std::uint8_t uv_dst = unpack_r_dst_operand(instruction.operand);
                 const int uv_slot = unpack_r_index_operand(instruction.operand);
-                if (captured_upvalues != nullptr &&
-                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < captured_upvalues->size() &&
-                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
-                    regs_ptr[uv_dst] = (*captured_upvalues)[static_cast<std::size_t>(uv_slot)]->value;
+                if (active_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    regs_ptr[uv_dst] = (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value;
                 } else {
                     regs_ptr[uv_dst] = Value::nil();
                 }
@@ -3257,10 +3261,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             case BytecodeOp::R_STORE_UPVALUE: {
                 const std::uint8_t uv_src = unpack_r_src_operand(instruction.operand);
                 const int uv_slot = unpack_r_index_operand(instruction.operand);
-                if (captured_upvalues != nullptr &&
-                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < captured_upvalues->size() &&
-                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
-                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
+                if (active_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < active_upvalues->size() &&
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    (*active_upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
                 }
                 ++ip; break;
             }
@@ -3285,6 +3289,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     active_call_env = parent.call_env;
                     active_module_name = parent.module_name;
                     active_module_env = parent.module_env;
+                    active_upvalues = parent.upvalues;
                     active_chunk = parent.chunk;
                     instructions_ptr = active_chunk->instructions.data();
                     metadata_ptr = active_chunk->metadata.data();

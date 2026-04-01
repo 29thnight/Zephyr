@@ -5353,13 +5353,16 @@ private:
             emit_r_spill_load(span, tmp, *slot - 256);
             return tmp;
         }
-        if (resolve_upvalue_slot(name).has_value()) {
-            // Upvalue functions fall back to stack mode (uses_only_locals_and_upvalues path)
-            // which is currently lighter than execute_register_bytecode for simple closures.
-            // R_LOAD_UPVALUE/R_STORE_UPVALUE opcodes exist but need execute_register_bytecode
-            // to be made lightweight before enabling.
-            fail_register_compile();
-            return std::nullopt;
+        if (const auto upvalue_slot = resolve_upvalue_slot(name); upvalue_slot.has_value()) {
+            const std::uint8_t reg = register_allocator_.alloc_temp();
+            int packed = 0;
+            if (!try_pack_r_src_index_operand(reg, static_cast<int>(*upvalue_slot), packed)) {
+                fail_register_compile();
+                return std::nullopt;
+            }
+            emit_r(BytecodeOp::R_LOAD_UPVALUE, span, reg, 0);
+            function_->instructions.back().operand = packed;
+            return reg;
         }
         const std::uint8_t reg = register_allocator_.alloc_temp();
         emit_r_load_global(span, reg, add_global_slot(name));
