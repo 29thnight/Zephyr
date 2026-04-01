@@ -1839,6 +1839,12 @@ RuntimeResult<Value> Runtime::load_bytecode_constant(const BytecodeFunction& fun
         constant);
 }
 
+// Cold helper — keep out of the hot dispatch loop's instruction cache.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
 RuntimeResult<Value> Runtime::apply_binary_op(TokenType op, const Value& left, const Value& right, const Span& span,
                                               const std::string& module_name) {
     if (op == TokenType::Plus) {
@@ -1930,6 +1936,12 @@ RuntimeResult<Value> Runtime::apply_binary_op(TokenType op, const Value& left, c
     return make_loc_error<Value>(module_name, span, "Unsupported binary operator.");
 }
 
+// Cold helper — keep out of the hot dispatch loop's instruction cache.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
 RuntimeResult<Value> Runtime::apply_unary_op(TokenType op, const Value& right, const Span& span, const std::string& module_name) {
     if (op == TokenType::Bang) {
         return Value::boolean(!is_truthy(right));
@@ -3871,8 +3883,14 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 break;
             }
             default: {
+#if defined(_MSC_VER)
+                __assume(0);  // all opcodes covered — enables MSVC jump table optimization
+#elif defined(__GNUC__) || defined(__clang__)
+                __builtin_unreachable();
+#else
                 const Span span = instruction_span(instruction);
                 return make_loc_error<Value>(module.name, span, "Unsupported opcode in register bytecode executor.");
+#endif
             }
         }
     }
@@ -6313,9 +6331,15 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             return do_return(ret_value);
         }
         default: {
+#if defined(_MSC_VER)
+            __assume(0);  // all opcodes covered — enables MSVC jump table optimization
+#elif defined(__GNUC__) || defined(__clang__)
+            __builtin_unreachable();
+#else
             const Span span = instruction_span(instr);
             return make_loc_error<CoroutineExecutionResult>(module_name, span,
                 "Unsupported opcode in register coroutine fast executor.");
+#endif
         }
         }
     }
