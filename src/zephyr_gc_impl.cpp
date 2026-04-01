@@ -3615,6 +3615,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     }
                     if (cmp_val) {
                         ++ip;
+                    } else if (instruction.jump_target >= 0) {
+                        ip = static_cast<std::size_t>(instruction.jump_target);
                     } else {
                         const InstructionMetadata& metadata = metadata_ptr[ip];
                         ip = metadata.jump_table.empty()
@@ -3624,7 +3626,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     break;
                 }
                 { const InstructionMetadata& metadata = metadata_ptr[ip];
-                if (metadata.jump_table.empty()) {
+                const std::int32_t jt = instruction.jump_target;
+                if (jt < 0 && metadata.jump_table.empty()) {
                     const Span span = instruction_span(instruction);
                     return make_loc_error<Value>(module.name, span, "Register compare superinstruction is missing jump metadata.");
                 }
@@ -3634,7 +3637,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ZEPHYR_TRY_ASSIGN(result,
                                   binary_fast_or_fallback(cmp_op, regs_ptr[src1], regs_ptr[src2], span));
                 if (!is_truthy(result)) {
-                    ip = static_cast<std::size_t>(metadata.jump_table.front());
+                    ip = jt >= 0 ? static_cast<std::size_t>(jt)
+                                 : static_cast<std::size_t>(metadata.jump_table.front());
                 } else {
                     ++ip;
                 } }
@@ -3659,14 +3663,17 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     }
                     if (cmp_val) {
                         ++ip;
+                    } else if (instruction.jump_target >= 0) {
+                        ip = static_cast<std::size_t>(instruction.jump_target);
                     } else {
                         const InstructionMetadata& cmpi_meta = metadata_ptr[ip];
                         ip = cmpi_meta.jump_table.empty() ? ip + 1 : static_cast<std::size_t>(cmpi_meta.jump_table.front());
                     }
                     break;
                 }
-                { const InstructionMetadata& cmpi_meta = metadata_ptr[ip];
-                if (cmpi_meta.jump_table.empty()) {
+                { const std::int32_t cmpi_jt = instruction.jump_target;
+                const InstructionMetadata& cmpi_meta = metadata_ptr[ip];
+                if (cmpi_jt < 0 && cmpi_meta.jump_table.empty()) {
                     const Span span = instruction_span(instruction);
                     return make_loc_error<Value>(module.name, span, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
                 }
@@ -3676,7 +3683,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 const Value cmpi_rhs_val = Value::integer(cmpi_imm);
                 ZEPHYR_TRY_ASSIGN(cmpi_result, binary_fast_or_fallback(cmpi_op, regs_ptr[cmpi_src], cmpi_rhs_val, span));
                 if (!is_truthy(cmpi_result)) {
-                    ip = static_cast<std::size_t>(cmpi_meta.jump_table.front());
+                    ip = cmpi_jt >= 0 ? static_cast<std::size_t>(cmpi_jt)
+                                      : static_cast<std::size_t>(cmpi_meta.jump_table.front());
                 } else { ++ip; } }
                 break;
             }
@@ -6025,13 +6033,20 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                 default: valid_op = false; break;
                 }
                 if (valid_op) {
-                    if (cond) { ++local_ip; } else { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+                    if (cond) {
+                        ++local_ip;
+                    } else if (instr.jump_target >= 0) {
+                        local_ip = static_cast<std::size_t>(instr.jump_target);
+                    } else {
+                        local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front());
+                    }
                     int_handled = true;
                 }
             }
             if (!int_handled) {
                 const Span span = instruction_span(instr);
-                if (metadata_ptr[local_ip].jump_table.empty()) {
+                const std::int32_t cjt = instr.jump_target;
+                if (cjt < 0 && metadata_ptr[local_ip].jump_table.empty()) {
                     return make_loc_error<CoroutineExecutionResult>(module_name, span,
                         "Register compare superinstruction is missing jump metadata.");
                 }
@@ -6047,7 +6062,10 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                     return make_loc_error<CoroutineExecutionResult>(module_name, span, "Invalid compare op in R_SI_CMP_JUMP_FALSE.");
                 }
                 ZEPHYR_TRY_ASSIGN(cmp_result, apply_binary_op(token, lv, rv, span, module_name));
-                if (!is_truthy(cmp_result)) { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+                if (!is_truthy(cmp_result)) {
+                    local_ip = cjt >= 0 ? static_cast<std::size_t>(cjt)
+                                        : static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front());
+                }
                 else { ++local_ip; }
             }
             break;
@@ -6070,14 +6088,17 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                 default:                                         cmp_val = false; break;
                 }
                 if (cmp_val) { ++local_ip; }
-                else {
+                else if (instr.jump_target >= 0) {
+                    local_ip = static_cast<std::size_t>(instr.jump_target);
+                } else {
                     const InstructionMetadata& cmpi_meta = metadata_ptr[local_ip];
                     local_ip = cmpi_meta.jump_table.empty() ? local_ip + 1 : static_cast<std::size_t>(cmpi_meta.jump_table.front());
                 }
                 break;
             }
-            { const Span s = instruction_span(instr);
-            if (metadata_ptr[local_ip].jump_table.empty()) {
+            { const std::int32_t cmpi_jt = instr.jump_target;
+            const Span s = instruction_span(instr);
+            if (cmpi_jt < 0 && metadata_ptr[local_ip].jump_table.empty()) {
                 return make_loc_error<CoroutineExecutionResult>(module_name, s, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
             }
             const BytecodeOp cmpi_op = register_bytecode_op_from_superinstruction_compare_kind(cmpi_kind);
@@ -6093,7 +6114,10 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             default: break;
             }
             ZEPHYR_TRY_ASSIGN(cmpi_result, apply_binary_op(cmpi_token, cmpi_lhs, cmpi_rhs_val, s, module_name));
-            if (!is_truthy(cmpi_result)) { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+            if (!is_truthy(cmpi_result)) {
+                local_ip = cmpi_jt >= 0 ? static_cast<std::size_t>(cmpi_jt)
+                                        : static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front());
+            }
             else { ++local_ip; } }
             break;
         }
@@ -7038,7 +7062,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     break;
                 }
                 case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
-                    if (metadata.jump_table.empty()) {
+                    const std::int32_t cjt3 = instruction.jump_target;
+                    if (cjt3 < 0 && metadata.jump_table.empty()) {
                         return make_loc_error<CoroutineExecutionResult>(module.name,
                                                                         span,
                                                                         "Register compare superinstruction is missing jump metadata.");
@@ -7051,14 +7076,16 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                                                               regs_ptr[src2],
                                                               span));
                     if (!is_truthy(result)) {
-                        local_ip = static_cast<std::size_t>(metadata.jump_table.front());
+                        local_ip = cjt3 >= 0 ? static_cast<std::size_t>(cjt3)
+                                             : static_cast<std::size_t>(metadata.jump_table.front());
                     } else {
                         ++local_ip;
                     }
                     break;
                 }
                 case BytecodeOp::R_SI_CMPI_JUMP_FALSE: {
-                    if (metadata.jump_table.empty()) {
+                    const std::int32_t cmpi_jt3 = instruction.jump_target;
+                    if (cmpi_jt3 < 0 && metadata.jump_table.empty()) {
                         return make_loc_error<CoroutineExecutionResult>(module.name, span, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
                     }
                     ZEPHYR_TRY_ASSIGN(cmpi_src_idx, register_index(unpack_r_si_cmpi_jump_false_src1(instruction.operand), span));
@@ -7069,7 +7096,8 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                         unpack_r_si_cmpi_jump_false_kind(instruction.operand));
                     ZEPHYR_TRY_ASSIGN(cmpi_result, binary_fast_or_fallback(cmpi_op, cmpi_lhs, cmpi_rhs_val, span));
                     if (!is_truthy(cmpi_result)) {
-                        local_ip = static_cast<std::size_t>(metadata.jump_table.front());
+                        local_ip = cmpi_jt3 >= 0 ? static_cast<std::size_t>(cmpi_jt3)
+                                                 : static_cast<std::size_t>(metadata.jump_table.front());
                     } else { ++local_ip; }
                     break;
                 }

@@ -75,6 +75,7 @@ typedef struct {
     uint32_t span_line;
     uint32_t ic_slot;
     void*    ic_shape;
+    int32_t  jump_target;
 } ZInstruction;
 
 /* ── Iterative call frame ────────────────────────────────────────────── */

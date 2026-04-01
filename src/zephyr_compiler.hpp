@@ -145,6 +145,7 @@ struct CompactInstruction {
     std::uint32_t span_line = 1;
     mutable std::uint32_t ic_slot = std::numeric_limits<std::uint32_t>::max();
     mutable struct Shape* ic_shape = nullptr;
+    std::int32_t jump_target = -1;  // Direct jump target for R_SI_CMP_JUMP_FALSE / R_SI_CMPI_JUMP_FALSE (avoids ic_slot conflict)
 
     CompactInstruction() : operand(0) {}
 };
@@ -152,7 +153,7 @@ struct CompactInstruction {
 #pragma warning(pop)
 #endif
 
-static_assert(sizeof(CompactInstruction) <= 24, "CompactInstruction must stay hot and cache-friendly.");
+static_assert(sizeof(CompactInstruction) <= 32, "CompactInstruction must stay hot and cache-friendly.");
 
 struct InstructionMetadata {
     std::string string_operand;
@@ -4029,8 +4030,10 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
                 if (kind.has_value()) {
                     code[i].op = BytecodeOp::R_SI_CMP_JUMP_FALSE;
                     code[i].operand = pack_r_si_cmp_jump_false_operand(code[i].src1, code[i].src2, *kind);
+                    const int cmp_jmp_target = unpack_r_jump_target_operand(code[j].operand);
                     metadata[i] = metadata[j];
-                    metadata[i].jump_table = {unpack_r_jump_target_operand(code[j].operand)};
+                    metadata[i].jump_table = {cmp_jmp_target};
+                    code[i].jump_target = cmp_jmp_target;  // pre-populate for C dispatch
                     deleted[j] = true;
                     ++func->superinstruction_fusions;
                     changed = true;
@@ -4142,6 +4145,8 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
             metadata[i].jump_table.front() >= 0 &&
             static_cast<std::size_t>(metadata[i].jump_table.front()) < index_map.size()) {
             metadata[i].jump_table.front() = index_map[static_cast<std::size_t>(metadata[i].jump_table.front())];
+            // Phase C: copy remapped jump target into instruction field for O(1) access in dispatch
+            code[i].jump_target = metadata[i].jump_table.front();
         }
         if (code[i].op == BytecodeOp::R_ADDI_JUMP &&
             static_cast<std::size_t>(code[i].ic_slot) < index_map.size()) {
