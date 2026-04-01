@@ -120,7 +120,9 @@ enum class BytecodeOp {
     R_LOAD_INDEX,    // dst=reg, src1=obj_reg, src2=index_reg
     R_LOAD_UPVALUE,  // dst=reg, operand=upvalue_slot_index; regs[dst] = captured_upvalues[slot]->value
     R_STORE_UPVALUE, // src=reg, operand=upvalue_slot_index; captured_upvalues[slot]->value = regs[src]
-    R_MAKE_FUNCTION, // dst=reg; metadata.bytecode=inner_func, metadata.names=param_info, metadata.string_operand=func_name, metadata.type_name=return_type, metadata.jump_table=captured_reg_indices
+    R_MAKE_FUNCTION,
+    R_MAKE_COROUTINE, // dst=reg; metadata.bytecode=coroutine_body; same pattern as R_MAKE_FUNCTION
+    R_RESUME,          // dst=reg, src1=coroutine_reg; dst = resume(src1) // dst=reg; metadata.bytecode=inner_func, metadata.names=param_info, metadata.string_operand=func_name, metadata.type_name=return_type, metadata.jump_table=captured_reg_indices
 };
 
 struct BytecodeFunction;
@@ -770,6 +772,8 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_LOAD_UPVALUE: return "R_LOAD_UPVALUE";
         case BytecodeOp::R_STORE_UPVALUE: return "R_STORE_UPVALUE";
         case BytecodeOp::R_MAKE_FUNCTION: return "R_MAKE_FUNCTION";
+        case BytecodeOp::R_MAKE_COROUTINE: return "R_MAKE_COROUTINE";
+        case BytecodeOp::R_RESUME: return "R_RESUME";
     }
     return "Unknown";
 }
@@ -3804,7 +3808,12 @@ inline int recompute_register_max(const BytecodeFunction& function) {
                 note_reg(instruction.src2);
                 break;
             case BytecodeOp::R_MAKE_FUNCTION:
+            case BytecodeOp::R_MAKE_COROUTINE:
                 note_reg(instruction.dst);
+                break;
+            case BytecodeOp::R_RESUME:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
                 break;
             default:
                 break;
@@ -5860,6 +5869,53 @@ private:
             // Store captured register indices so the interpreter can create
             // UpvalueCells directly from register values (Approach B — no Environment walk).
             meta.jump_table = std::move(captured_reg_indices);
+            return dst;
+        }
+
+        if (auto* resume_expr = dynamic_cast<ResumeExpr*>(expr)) {
+            const auto target_reg = compile_expr_r(resume_expr->target.get());
+            if (!target_reg.has_value()) return std::nullopt;
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r(BytecodeOp::R_RESUME, expr->span, dst, *target_reg);
+            register_allocator_.free_temp(*target_reg);
+            return dst;
+        }
+
+        if (auto* co_expr = dynamic_cast<CoroutineExpr*>(expr)) {
+            BytecodeCompiler child(this);
+            auto inner_bytecode = child.compile("<coroutine>", co_expr->params, co_expr->body.get(), true);
+
+            // Resolve captured upvalue register indices (same pattern as R_MAKE_FUNCTION)
+            std::vector<std::int32_t> capture_regs;
+            if (inner_bytecode) {
+                for (const auto& uv_name : inner_bytecode->upvalue_names) {
+                    if (const auto slot = resolve_local_slot(uv_name); slot.has_value()) {
+                        capture_regs.push_back(static_cast<std::int32_t>(*slot));
+                    } else {
+                        fail_register_compile();
+                        return std::nullopt;
+                    }
+                }
+            }
+
+            const std::uint8_t dst = register_allocator_.alloc_temp();
+            emit_r(BytecodeOp::R_MAKE_COROUTINE, expr->span, dst, 0);
+            auto& meta = function_->metadata.back();
+            meta.bytecode = inner_bytecode;
+            meta.string_operand = "<coroutine>";
+            // Store param metadata (interleaved name/type pairs)
+            meta.names.clear();
+            for (const auto& p : co_expr->params) {
+                meta.names.push_back(p.name);
+                meta.names.push_back(p.type.has_value() ? p.type->display_name() : "");
+            }
+            if (co_expr->return_type.has_value()) {
+                meta.type_name = co_expr->return_type->display_name();
+            }
+            meta.jump_table.clear();
+            for (auto r : capture_regs) {
+                meta.jump_table.push_back(r);
+            }
             return dst;
         }
 

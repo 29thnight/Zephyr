@@ -3312,6 +3312,71 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 regs_ptr[instruction.dst] = Value::object(func_obj);
                 ++ip; break;
             }
+            case BytecodeOp::R_RESUME: {
+                const Span span = instruction_span(instruction);
+                const Value& target = regs_ptr[instruction.src1];
+                ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target, span, *active_module_name));
+                regs_ptr[instruction.dst] = result;
+                ++ip; break;
+            }
+            case BytecodeOp::R_MAKE_COROUTINE: {
+                const Span span = instruction_span(instruction);
+                const InstructionMetadata& meta = metadata_ptr[ip];
+
+                // Cache params/return_type on first call (same pattern as R_MAKE_FUNCTION)
+                if (meta.bytecode && !meta.bytecode->closure_params_cached) {
+                    std::vector<Param> co_params;
+                    for (std::size_t i = 0; i + 1 < meta.names.size(); i += 2) {
+                        Param p;
+                        p.name = meta.names[i];
+                        p.span = span;
+                        if (!meta.names[i + 1].empty()) {
+                            p.type = TypeRef{{meta.names[i + 1]}, span};
+                        }
+                        co_params.push_back(std::move(p));
+                    }
+                    meta.bytecode->cached_closure_params = std::move(co_params);
+                    if (meta.type_name.has_value() && !meta.type_name->empty()) {
+                        meta.bytecode->cached_closure_return_type = TypeRef{{*meta.type_name}, span};
+                    }
+                    meta.bytecode->closure_params_cached = true;
+                }
+
+                if (!meta.bytecode->cached_closure_params.empty()) {
+                    return make_loc_error<Value>(*active_module_name, span,
+                                                 "coroutine fn expressions do not support parameters yet.");
+                }
+
+                const auto return_type_str = (meta.type_name.has_value() && !meta.type_name->empty())
+                    ? std::optional<std::string>(*meta.type_name)
+                    : std::nullopt;
+
+                Environment* closure_env = select_closure_environment(active_call_env, meta.bytecode);
+                auto* coroutine = allocate<CoroutineObject>(
+                    *active_module_name,
+                    closure_env,
+                    meta.bytecode,
+                    return_type_str);
+                ensure_coroutine_trace_id(coroutine);
+                record_coroutine_trace_event(CoroutineTraceEvent::Type::Created, coroutine);
+                coroutine->frames.front().global_resolution_env =
+                    module_or_root_environment(coroutine->frames.front().closure);
+
+                // Create upvalue cells directly from parent registers (same as R_MAKE_FUNCTION)
+                if (!meta.jump_table.empty() && coroutine->frames.front().bytecode != nullptr) {
+                    auto& frame_upvalues = coroutine->frames.front().captured_upvalues;
+                    frame_upvalues.reserve(meta.jump_table.size());
+                    for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
+                        frame_upvalues.push_back(
+                            allocate<UpvalueCellObject>(
+                                regs_ptr[meta.jump_table[i]], true, std::nullopt,
+                                HandleContainerKind::CoroutineFrame));
+                    }
+                }
+
+                regs_ptr[instruction.dst] = Value::object(coroutine);
+                ++ip; break;
+            }
             case BytecodeOp::R_RETURN: {
                 const Value return_value = regs_ptr[instruction.src1];
                 if (!iterative_call_stack_.empty()) {
@@ -13256,6 +13321,8 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
             case BytecodeOp::R_SI_LOOP_STEP:
             case BytecodeOp::R_MAKE_FUNCTION:
+            case BytecodeOp::R_MAKE_COROUTINE:
+            case BytecodeOp::R_RESUME:
                 return true;
             default:
                 return false;
@@ -13464,6 +13531,23 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                             }
                             out << "]";
                         }
+                        break;
+                    case BytecodeOp::R_MAKE_COROUTINE:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " name=" << metadata.string_operand
+                            << " captures=" << metadata.jump_table.size();
+                        if (metadata.bytecode) {
+                            out << " upvalues=[";
+                            for (std::size_t ui = 0; ui < metadata.jump_table.size(); ++ui) {
+                                if (ui > 0) out << ",";
+                                out << "r" << metadata.jump_table[ui];
+                            }
+                            out << "]";
+                        }
+                        break;
+                    case BytecodeOp::R_RESUME:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " src=r" << static_cast<int>(instruction.src1);
                         break;
                     default:
                         break;
