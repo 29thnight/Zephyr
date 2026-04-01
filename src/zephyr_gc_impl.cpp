@@ -2332,7 +2332,6 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                                                         const std::vector<UpvalueCellObject*>* captured_upvalues,
                                                         const std::vector<Value>* call_args) {
     (void)params;
-    (void)captured_upvalues;
     ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(&chunk, call_span, module.name, "Register bytecode chunk"));
 
     const std::size_t reg_count = static_cast<std::size_t>(std::max({chunk.max_regs, chunk.local_count, 0}));
@@ -2519,9 +2518,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
 
     // ── C Dispatch Fast Path (computed goto) ────────────────────────
     // Try C dispatch for pure register-mode functions. Falls back to C++ for cold opcodes.
+    // Skip for functions with upvalues (C dispatch doesn't support R_LOAD_UPVALUE yet).
     static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
                   "CompactInstruction and ZInstruction must have identical layout.");
-    {
+    if (captured_upvalues == nullptr || captured_upvalues->empty()) {
         // Extract int constants
         std::vector<int64_t> c_int_constants(chunk.constants.size());
         std::vector<int> c_int_valid(chunk.constants.size(), 0);
@@ -3240,6 +3240,28 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 const Span li_span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(li_result, get_index_value(li_obj, li_idx, li_span, module.name));
                 regs_ptr[instruction.dst] = li_result;
+                ++ip; break;
+            }
+            case BytecodeOp::R_LOAD_UPVALUE: {
+                const std::uint8_t uv_dst = unpack_r_dst_operand(instruction.operand);
+                const int uv_slot = unpack_r_index_operand(instruction.operand);
+                if (captured_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < captured_upvalues->size() &&
+                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    regs_ptr[uv_dst] = (*captured_upvalues)[static_cast<std::size_t>(uv_slot)]->value;
+                } else {
+                    regs_ptr[uv_dst] = Value::nil();
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_STORE_UPVALUE: {
+                const std::uint8_t uv_src = unpack_r_src_operand(instruction.operand);
+                const int uv_slot = unpack_r_index_operand(instruction.operand);
+                if (captured_upvalues != nullptr &&
+                    uv_slot >= 0 && static_cast<std::size_t>(uv_slot) < captured_upvalues->size() &&
+                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)] != nullptr) {
+                    (*captured_upvalues)[static_cast<std::size_t>(uv_slot)]->value = regs_ptr[uv_src];
+                }
                 ++ip; break;
             }
             case BytecodeOp::R_RETURN: {

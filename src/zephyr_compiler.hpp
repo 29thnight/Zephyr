@@ -118,6 +118,8 @@ enum class BytecodeOp {
     R_BUILD_STRUCT,  // dst=reg, src1=first_field_reg, operand_a=field_count; metadata.string_operand=type_name, metadata.names=field_names
     R_BUILD_ARRAY,   // dst=reg, src1=first_elem_reg, operand_a=elem_count
     R_LOAD_INDEX,    // dst=reg, src1=obj_reg, src2=index_reg
+    R_LOAD_UPVALUE,  // dst=reg, operand=upvalue_slot_index; regs[dst] = captured_upvalues[slot]->value
+    R_STORE_UPVALUE, // src=reg, operand=upvalue_slot_index; captured_upvalues[slot]->value = regs[src]
 };
 
 struct BytecodeFunction;
@@ -759,6 +761,8 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_BUILD_STRUCT: return "R_BUILD_STRUCT";
         case BytecodeOp::R_BUILD_ARRAY: return "R_BUILD_ARRAY";
         case BytecodeOp::R_LOAD_INDEX: return "R_LOAD_INDEX";
+        case BytecodeOp::R_LOAD_UPVALUE: return "R_LOAD_UPVALUE";
+        case BytecodeOp::R_STORE_UPVALUE: return "R_STORE_UPVALUE";
     }
     return "Unknown";
 }
@@ -5350,6 +5354,10 @@ private:
             return tmp;
         }
         if (resolve_upvalue_slot(name).has_value()) {
+            // Upvalue functions fall back to stack mode (uses_only_locals_and_upvalues path)
+            // which is currently lighter than execute_register_bytecode for simple closures.
+            // R_LOAD_UPVALUE/R_STORE_UPVALUE opcodes exist but need execute_register_bytecode
+            // to be made lightweight before enabling.
             fail_register_compile();
             return std::nullopt;
         }
