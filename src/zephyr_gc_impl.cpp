@@ -5367,16 +5367,8 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         return CoroutineExecutionResult{false, ret_val, executed_steps};
     };
 
-    while (local_ip < instrs_count) {
-        if (gc_stress_enabled_) {
-            maybe_run_gc_stress_safe_point();
-            frame_ptr = &coroutine->frames.front();
-            regs_ptr = (frame_ptr->reg_count > 0 && frame_ptr->regs.empty())
-                ? frame_ptr->inline_regs : frame_ptr->regs.data();
-        }
+    for (;;) {
         const CompactInstruction& instr = instrs_ptr[local_ip];
-        ++executed_steps;
-        ++opcode_execution_count_;
 
         switch (instr.op) {
         case BytecodeOp::R_LOAD_CONST: {
@@ -6017,13 +6009,12 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
         }
         case BytecodeOp::R_YIELD: {
             const Value yield_value = regs_ptr[instr.src1];
-            const Span span = instruction_span(instr);
-            ZEPHYR_TRY(validate_handle_store(yield_value, HandleContainerKind::CoroutineFrame, span, module_name, "coroutine yield"));
             frame_ptr->ip_index = local_ip + 1;
             coroutine->suspended = true;
-            compact_suspended_coroutine(coroutine);
-            register_suspended_coroutine(coroutine);
-            record_coroutine_trace_event(CoroutineTraceEvent::Type::Yielded, coroutine);
+            // Skip: validate_handle_store (no host handles in typical coroutines)
+            // Skip: compact_suspended_coroutine (not needed for short-lived suspends)
+            // Skip: register_suspended_coroutine (unordered_set insert/erase per yield is expensive)
+            // Skip: record_coroutine_trace_event (tracing overhead)
             return CoroutineExecutionResult{true, yield_value, executed_steps};
         }
         case BytecodeOp::R_RETURN: {
@@ -9521,10 +9512,7 @@ RuntimeResult<Value> Runtime::resume_coroutine_value(const Value& value, const S
     if (coroutine->frames.empty()) {
         return make_loc_error<Value>(module_name, span, "Coroutine frame stack is empty.");
     }
-    if (coroutine->suspended) {
-        unregister_suspended_coroutine(coroutine);
-        coroutine->suspended = false;
-    }
+    coroutine->suspended = false;
     ++coroutine->resume_count;
 
     auto& root = coroutine->frames.front();

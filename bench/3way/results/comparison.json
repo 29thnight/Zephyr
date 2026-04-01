@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-01T12:00:20.657656+00:00",
-  "iterations": 5,
+  "generated_at": "2026-04-01T12:05:55.128569+00:00",
+  "iterations": 10,
   "runtimes": {
     "zephyr": "C:\\Users\\lance\\source\\Zephyr\\.claude\\worktrees\\quirky-black\\build\\zephyr.exe",
     "lua": "C:\\Users\\lance\\source\\Zephyr\\.claude\\worktrees\\quirky-black\\bench\\3way\\lua-5.5.0\\lua.exe",
@@ -11,25 +11,25 @@
       "name": "fibonacci(35)",
       "results": {
         "zephyr": {
-          "mean_ms": 1427.97,
-          "min_ms": 1402.63,
-          "max_ms": 1460.22,
-          "p95_ms": 1460.22,
-          "samples": 5
+          "mean_ms": 1487.13,
+          "min_ms": 1381.65,
+          "max_ms": 1639.97,
+          "p95_ms": 1639.97,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 949.82,
-          "min_ms": 920.78,
-          "max_ms": 990.67,
-          "p95_ms": 990.67,
-          "samples": 5
+          "mean_ms": 960.49,
+          "min_ms": 902.61,
+          "max_ms": 1091.41,
+          "p95_ms": 1091.41,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 2419.01,
-          "min_ms": 2370.12,
-          "max_ms": 2438.1,
-          "p95_ms": 2438.1,
-          "samples": 5
+          "mean_ms": 2478.76,
+          "min_ms": 2336.91,
+          "max_ms": 2945.78,
+          "p95_ms": 2945.78,
+          "samples": 10
         }
       },
       "winner": "lua"
@@ -38,25 +38,25 @@
       "name": "hot_loop(1M)",
       "results": {
         "zephyr": {
-          "mean_ms": 34.89,
-          "min_ms": 31.94,
-          "max_ms": 39.72,
-          "p95_ms": 39.72,
-          "samples": 5
+          "mean_ms": 37.59,
+          "min_ms": 31.82,
+          "max_ms": 42.4,
+          "p95_ms": 42.4,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 19.38,
-          "min_ms": 17.75,
-          "max_ms": 21.8,
-          "p95_ms": 21.8,
-          "samples": 5
+          "mean_ms": 17.14,
+          "min_ms": 15.88,
+          "max_ms": 20.71,
+          "p95_ms": 20.71,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 48.91,
-          "min_ms": 46.2,
-          "max_ms": 52.67,
-          "p95_ms": 52.67,
-          "samples": 5
+          "mean_ms": 49.23,
+          "min_ms": 45.64,
+          "max_ms": 53.12,
+          "p95_ms": 53.12,
+          "samples": 10
         }
       },
       "winner": "lua"
@@ -65,25 +65,25 @@
       "name": "array_sum(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 49.78,
-          "min_ms": 47.56,
-          "max_ms": 52.7,
-          "p95_ms": 52.7,
-          "samples": 5
+          "mean_ms": 52.33,
+          "min_ms": 47.16,
+          "max_ms": 57.25,
+          "p95_ms": 57.25,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 41.39,
-          "min_ms": 38.13,
-          "max_ms": 44.91,
-          "p95_ms": 44.91,
-          "samples": 5
+          "mean_ms": 36.28,
+          "min_ms": 33.77,
+          "max_ms": 39.23,
+          "p95_ms": 39.23,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 93.01,
-          "min_ms": 83.66,
-          "max_ms": 97.89,
-          "p95_ms": 97.89,
-          "samples": 5
+          "mean_ms": 92.5,
+          "min_ms": 82.17,
+          "max_ms": 106.33,
+          "p95_ms": 106.33,
+          "samples": 10
         }
       },
       "winner": "lua"
@@ -92,25 +92,25 @@
       "name": "closure(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 60.54,
-          "min_ms": 55.95,
-          "max_ms": 68.45,
-          "p95_ms": 68.45,
-          "samples": 5
+          "mean_ms": 57.49,
+          "min_ms": 54.01,
+          "max_ms": 64.73,
+          "p95_ms": 64.73,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 40.76,
-          "min_ms": 38.32,
-          "max_ms": 43.77,
-          "p95_ms": 43.77,
-          "samples": 5
+          "mean_ms": 38.1,
+          "min_ms": 34.35,
+          "max_ms": 45.71,
+          "p95_ms": 45.71,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 83.73,
-          "min_ms": 75.12,
-          "max_ms": 91.58,
-          "p95_ms": 91.58,
-          "samples": 5
+          "mean_ms": 82.35,
+          "min_ms": 75.53,
+          "max_ms": 90.1,
+          "p95_ms": 90.1,
+          "samples": 10
         }
       },
       "winner": "lua"
@@ -119,52 +119,52 @@
       "name": "struct(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 39.29,
-          "min_ms": 36.4,
-          "max_ms": 42.69,
-          "p95_ms": 42.69,
-          "samples": 5
+          "mean_ms": 46.79,
+          "min_ms": 37.0,
+          "max_ms": 89.13,
+          "p95_ms": 89.13,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 32.04,
-          "min_ms": 30.85,
-          "max_ms": 35.17,
-          "p95_ms": 35.17,
-          "samples": 5
+          "mean_ms": 96.09,
+          "min_ms": 66.52,
+          "max_ms": 165.86,
+          "p95_ms": 165.86,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 113.94,
-          "min_ms": 104.89,
-          "max_ms": 121.93,
-          "p95_ms": 121.93,
-          "samples": 5
+          "mean_ms": 121.69,
+          "min_ms": 108.56,
+          "max_ms": 137.71,
+          "p95_ms": 137.71,
+          "samples": 10
         }
       },
-      "winner": "lua"
+      "winner": "zephyr"
     },
     {
       "name": "coroutine(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 80.88,
-          "min_ms": 78.95,
-          "max_ms": 83.79,
-          "p95_ms": 83.79,
-          "samples": 5
+          "mean_ms": 82.13,
+          "min_ms": 76.29,
+          "max_ms": 91.3,
+          "p95_ms": 91.3,
+          "samples": 10
         },
         "lua": {
-          "mean_ms": 234.83,
-          "min_ms": 222.13,
-          "max_ms": 251.86,
-          "p95_ms": 251.86,
-          "samples": 5
+          "mean_ms": 256.33,
+          "min_ms": 227.56,
+          "max_ms": 394.79,
+          "p95_ms": 394.79,
+          "samples": 10
         },
         "gravity": {
-          "mean_ms": 17.18,
-          "min_ms": 15.15,
-          "max_ms": 21.16,
-          "p95_ms": 21.16,
-          "samples": 5
+          "mean_ms": 17.35,
+          "min_ms": 14.62,
+          "max_ms": 22.06,
+          "p95_ms": 22.06,
+          "samples": 10
         }
       },
       "winner": "gravity"
