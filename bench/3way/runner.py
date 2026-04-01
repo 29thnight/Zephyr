@@ -7,10 +7,12 @@ wall-clock execution times.
 Usage:
     python runner.py [--iterations N] [--output PATH]
     python runner.py --zephyr PATH --lua PATH --gravity PATH
+    python runner.py --telemetry   # merge zephyr stats into JSON output
 """
 
 import argparse
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -102,6 +104,30 @@ CASES = [
             "gravity": "scripts/coroutine.gravity",
         },
     },
+    {
+        "name": "native_callback(10K)",
+        "scripts": {
+            "zephyr": "scripts/native_callback.zph",
+            "lua": "scripts/native_callback.lua",
+            "gravity": "scripts/native_callback.gravity",
+        },
+    },
+    {
+        "name": "string_ops(10K)",
+        "scripts": {
+            "zephyr": "scripts/string_ops.zph",
+            "lua": "scripts/string_ops.lua",
+            "gravity": "scripts/string_ops.gravity",
+        },
+    },
+    {
+        "name": "method_dispatch(100K)",
+        "scripts": {
+            "zephyr": "scripts/method_dispatch.zph",
+            "lua": "scripts/method_dispatch.lua",
+            "gravity": "scripts/method_dispatch.gravity",
+        },
+    },
 ]
 
 
@@ -122,19 +148,25 @@ class TimingResult:
         return max(self.times_ms) if self.times_ms else 0.0
 
     @property
+    def p50_ms(self) -> float:
+        if not self.times_ms:
+            return 0.0
+        return statistics.median(self.times_ms)
+
+    @property
     def p95_ms(self) -> float:
         if not self.times_ms:
             return 0.0
         sorted_t = sorted(self.times_ms)
-        idx = int(len(sorted_t) * 0.95)
+        idx = int(math.ceil(len(sorted_t) * 0.95)) - 1
         return sorted_t[min(idx, len(sorted_t) - 1)]
 
     def to_dict(self) -> dict:
         return {
-            "mean_ms": round(self.mean_ms, 2),
             "min_ms": round(self.min_ms, 2),
-            "max_ms": round(self.max_ms, 2),
+            "p50_ms": round(self.p50_ms, 2),
             "p95_ms": round(self.p95_ms, 2),
+            "mean_ms": round(self.mean_ms, 2),
             "samples": len(self.times_ms),
         }
 
@@ -177,17 +209,34 @@ def check_binaries(binaries: dict[str, str]) -> dict[str, str]:
     return available
 
 
+def collect_telemetry(zephyr_binary: str) -> dict | None:
+    """Run 'zephyr stats' and return parsed JSON, or None on failure."""
+    try:
+        result = subprocess.run(
+            [zephyr_binary, "stats"],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            output = result.stdout.decode("utf-8", errors="replace").strip()
+            if output:
+                return json.loads(output)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError, OSError):
+        pass
+    return None
+
+
 def run_benchmark(
     binaries: dict[str, str],
     iterations: int = 5,
-    warmup: int = 1,
+    warmup: int = 2,
 ) -> list[dict]:
     """Run all benchmark cases and return results."""
     results = []
 
     for case in CASES:
         print(f"\n  {case['name']}")
-        print(f"  {'─' * 50}")
+        print(f"  {'─' * 60}")
         case_results = {}
 
         for lang, script_rel in case["scripts"].items():
@@ -198,7 +247,7 @@ def run_benchmark(
             cmd = build_command(lang, binaries[lang], script)
             timing = TimingResult()
 
-            # Warmup
+            # Warmup (not counted in results)
             for _ in range(warmup):
                 try:
                     run_once(cmd)
@@ -217,14 +266,18 @@ def run_benchmark(
 
             if timing.times_ms:
                 case_results[lang] = timing
-                print(f"    {lang:>8}: {timing.mean_ms:>10.2f} ms  (min={timing.min_ms:.2f}, max={timing.max_ms:.2f})")
+                print(
+                    f"    {lang:>8}: min={timing.min_ms:>8.2f}ms  "
+                    f"p50={timing.p50_ms:>8.2f}ms  "
+                    f"p95={timing.p95_ms:>8.2f}ms"
+                )
             else:
                 print(f"    {lang:>8}: FAILED")
 
-        # Determine winner
+        # Determine winner by minimum time (most stable metric)
         winner = ""
         if case_results:
-            winner = min(case_results, key=lambda k: case_results[k].mean_ms)
+            winner = min(case_results, key=lambda k: case_results[k].min_ms)
 
         results.append({
             "name": case["name"],
@@ -236,47 +289,83 @@ def run_benchmark(
 
 
 def print_summary(results: list[dict], binaries: dict[str, str]):
-    """Print a formatted summary table."""
+    """Print a formatted summary table with min times and percentage comparison."""
     langs = ["lua", "gravity", "zephyr"]
     available = [l for l in langs if l in binaries]
 
+    # Use first available language as baseline for percentage comparison
+    baseline_lang = available[0] if available else None
+
     print("\n")
-    print("=" * 70)
+    print("=" * 80)
     print("  3-Way Benchmark: Lua vs Gravity vs Zephyr")
-    print("=" * 70)
+    print("  (primary metric: min wall-clock time)")
+    print("=" * 80)
 
     # Header
-    header = f"  {'Case':<20}"
+    header = f"  {'Case':<22}"
     for lang in available:
-        header += f"  {lang.capitalize():>12}"
-    header += f"  {'Winner':>10}"
+        header += f"  {lang.capitalize():>10}"
+        if lang != baseline_lang:
+            header += f" {'%':>6}"
+    header += f"  {'Winner':>8}"
     print(header)
-    print(f"  {'─' * 18}  " + "  ".join("─" * 12 for _ in available) + "  " + "─" * 10)
+    sep = f"  {'─' * 20}  "
+    for lang in available:
+        sep += "─" * 10 + "  "
+        if lang != baseline_lang:
+            sep += "─" * 6 + "  "
+    sep += "─" * 8
+    print(sep)
 
     # Rows
     for case in results:
-        row = f"  {case['name']:<20}"
+        row = f"  {case['name']:<22}"
+        baseline_min = None
+        if baseline_lang and baseline_lang in case["results"]:
+            baseline_min = case["results"][baseline_lang]["min_ms"]
+
         for lang in available:
             if lang in case["results"]:
-                ms = case["results"][lang]["mean_ms"]
-                row += f"  {ms:>10.2f}ms"
+                ms = case["results"][lang]["min_ms"]
+                row += f"  {ms:>8.2f}ms"
+                if lang != baseline_lang:
+                    if baseline_min and baseline_min > 0:
+                        pct = ((ms / baseline_min) - 1.0) * 100
+                        sign = "+" if pct >= 0 else ""
+                        row += f" {sign}{pct:>4.0f}%"
+                    else:
+                        row += f" {'N/A':>6}"
             else:
-                row += f"  {'N/A':>12}"
+                row += f"  {'N/A':>10}"
+                if lang != baseline_lang:
+                    row += f" {'':>6}"
         winner = case.get("winner", "")
-        row += f"  {winner.capitalize():>10}"
+        row += f"  {winner.capitalize():>8}"
         print(row)
 
-    print("=" * 70)
+    print("=" * 80)
 
 
-def save_json(results: list[dict], binaries: dict[str, str], iterations: int, output: str):
+def save_json(
+    results: list[dict],
+    binaries: dict[str, str],
+    iterations: int,
+    warmup: int,
+    output: str,
+    telemetry: dict | None = None,
+):
     """Save results to JSON."""
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "iterations": iterations,
+        "warmup": warmup,
         "runtimes": binaries,
         "cases": results,
     }
+    if telemetry is not None:
+        report["telemetry"] = telemetry
+
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -290,8 +379,9 @@ def main():
     parser.add_argument("--lua", default=DEFAULTS["lua"], help="Path to lua binary")
     parser.add_argument("--gravity", default=DEFAULTS["gravity"], help="Path to gravity binary")
     parser.add_argument("--iterations", "-n", type=int, default=5, help="Measurement iterations (default: 5)")
-    parser.add_argument("--warmup", "-w", type=int, default=1, help="Warmup iterations (default: 1)")
+    parser.add_argument("--warmup", "-w", type=int, default=2, help="Warmup iterations (default: 2)")
     parser.add_argument("--output", "-o", default=str(SCRIPT_DIR / "results" / "comparison.json"), help="Output JSON path")
+    parser.add_argument("--telemetry", action="store_true", help="Merge 'zephyr stats' output into JSON results")
     args = parser.parse_args()
 
     binaries_requested = {
@@ -315,7 +405,18 @@ def main():
 
     results = run_benchmark(binaries, iterations=args.iterations, warmup=args.warmup)
     print_summary(results, binaries)
-    save_json(results, binaries, args.iterations, args.output)
+
+    # Collect telemetry if requested
+    telemetry_data = None
+    if args.telemetry and "zephyr" in binaries:
+        print("\n  Collecting telemetry from 'zephyr stats'...")
+        telemetry_data = collect_telemetry(binaries["zephyr"])
+        if telemetry_data:
+            print("  Telemetry collected successfully.")
+        else:
+            print("  Telemetry collection failed or no data returned.")
+
+    save_json(results, binaries, args.iterations, args.warmup, args.output, telemetry_data)
 
 
 if __name__ == "__main__":

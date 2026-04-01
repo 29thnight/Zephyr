@@ -1,0 +1,31 @@
+// Object method call benchmark: function calls with struct parameter x 100K
+
+struct Entity {
+    x: int,
+    y: int,
+    hp: int,
+}
+
+fn move_entity(e: Entity, dx: int) -> int {
+    return e.x + dx;
+}
+
+fn damage_entity(e: Entity, dmg: int) -> int {
+    return e.hp - dmg;
+}
+
+fn heal_entity(e: Entity, amount: int) -> int {
+    return e.hp + amount;
+}
+
+fn main() {
+    let e = Entity { x: 0, y: 0, hp: 100 };
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 100000 {
+        total = total + move_entity(e, i);
+        total = total + damage_entity(e, 1);
+        total = total + heal_entity(e, 2);
+        i = i + 1;
+    }
+}

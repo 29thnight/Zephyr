@@ -1,0 +1,21 @@
+// Simulates host API call pattern: deep function call chain (10 levels deep x 10K calls)
+
+fn level10(x: int) -> int { return x + 1; }
+fn level9(x: int) -> int { return level10(x); }
+fn level8(x: int) -> int { return level9(x); }
+fn level7(x: int) -> int { return level8(x); }
+fn level6(x: int) -> int { return level7(x); }
+fn level5(x: int) -> int { return level6(x); }
+fn level4(x: int) -> int { return level5(x); }
+fn level3(x: int) -> int { return level4(x); }
+fn level2(x: int) -> int { return level3(x); }
+fn level1(x: int) -> int { return level2(x); }
+
+fn main() {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 10000 {
+        total = level1(total);
+        i = i + 1;
+    }
+}

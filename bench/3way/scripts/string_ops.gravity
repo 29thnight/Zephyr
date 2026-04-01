@@ -1,0 +1,9 @@
+// String concatenation benchmark: build strings x 10K
+
+func main() {
+    var i = 0;
+    while (i < 10000) {
+        var s = "hello" + " " + "world" + " " + "test";
+        i = i + 1;
+    }
+}

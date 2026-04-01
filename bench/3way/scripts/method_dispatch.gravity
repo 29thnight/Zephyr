@@ -1,0 +1,33 @@
+// Object method call benchmark: class with methods x 100K
+
+class Entity {
+    var x;
+    var y;
+    var hp;
+    func init(a, b, c) {
+        x = a;
+        y = b;
+        hp = c;
+    }
+    func move(dx) {
+        return x + dx;
+    }
+    func damage(dmg) {
+        return hp - dmg;
+    }
+    func heal(amount) {
+        return hp + amount;
+    }
+}
+
+func main() {
+    var e = Entity(0, 0, 100);
+    var total = 0;
+    var i = 0;
+    while (i < 100000) {
+        total = total + e.move(i);
+        total = total + e.damage(1);
+        total = total + e.heal(2);
+        i = i + 1;
+    }
+}

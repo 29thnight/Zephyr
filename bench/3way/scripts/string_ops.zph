@@ -1,0 +1,9 @@
+// String concatenation benchmark: build strings x 10K
+
+fn main() {
+    let mut i: int = 0;
+    while i < 10000 {
+        let s: string = "hello" + " " + "world" + " " + "test";
+        i = i + 1;
+    }
+}
