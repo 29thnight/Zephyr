@@ -146,7 +146,10 @@ void initialize_struct_instance(StructInstanceObject* instance) {
     if (instance == nullptr) {
         return;
     }
-    instance->shape = shape_for_struct_type(instance->type);
+    if (instance->type->cached_shape == nullptr) {
+        instance->type->cached_shape = shape_for_struct_type(instance->type);
+    }
+    instance->shape = instance->type->cached_shape;
     const std::size_t field_count = instance->shape == nullptr ? 0 : static_cast<std::size_t>(instance->shape->field_count);
     instance->field_values.assign(field_count, Value::nil());
 }
@@ -2490,6 +2493,122 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ++ip;
                 break;
             }
+            case BytecodeOp::R_LOAD_INT: {
+                regs_ptr[unpack_r_load_int_dst(instruction.operand)] =
+                    Value::integer(unpack_r_load_int_value(instruction.operand));
+                ++ip;
+                break;
+            }
+            case BytecodeOp::R_ADDI: {
+                const Value& addi_src = regs_ptr[unpack_r_addi_src(instruction.operand)];
+                const std::int64_t addi_imm = unpack_r_addi_imm(instruction.operand);
+                if (addi_src.is_int()) {
+                    const std::int64_t sum = addi_src.as_int() + addi_imm;
+                    if (sum >= Value::kIntMin && sum <= Value::kIntMax) {
+                        regs_ptr[unpack_r_addi_dst(instruction.operand)] = Value::integer(sum);
+                        ++ip;
+                        break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                const Value imm_val = Value::integer(addi_imm);
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, addi_src, imm_val, span));
+                regs_ptr[unpack_r_addi_dst(instruction.operand)] = result; }
+                ++ip;
+                break;
+            }
+            case BytecodeOp::R_MODI: {
+                const Value& modi_src = regs_ptr[unpack_r_modi_src(instruction.operand)];
+                const std::int64_t modi_imm = unpack_r_modi_imm(instruction.operand);
+                if (modi_src.is_int() && modi_imm > 0) {
+                    regs_ptr[unpack_r_modi_dst(instruction.operand)] = Value::integer(modi_src.as_int() % modi_imm);
+                    ++ip;
+                    break;
+                }
+                { const Span span = instruction_span(instruction);
+                const Value imm_val = Value::integer(modi_imm);
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_MOD, modi_src, imm_val, span));
+                regs_ptr[unpack_r_modi_dst(instruction.operand)] = result; }
+                ++ip;
+                break;
+            }
+            case BytecodeOp::R_ADDI_JUMP: {
+                const Value& aj_src = regs_ptr[unpack_r_addi_src(instruction.operand)];
+                const std::int64_t aj_imm = unpack_r_addi_imm(instruction.operand);
+                if (aj_src.is_int()) {
+                    const std::int64_t aj_sum = aj_src.as_int() + aj_imm;
+                    if (aj_sum >= Value::kIntMin && aj_sum <= Value::kIntMax) {
+                        regs_ptr[unpack_r_addi_dst(instruction.operand)] = Value::integer(aj_sum);
+                        ip = static_cast<std::size_t>(instruction.ic_slot);
+                        break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                const Value imm_val = Value::integer(aj_imm);
+                ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, aj_src, imm_val, span));
+                regs_ptr[unpack_r_addi_dst(instruction.operand)] = result; }
+                ip = static_cast<std::size_t>(instruction.ic_slot);
+                break;
+            }
+            case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP: {
+                const std::uint8_t acj_reg = unpack_r_si_acj_reg(instruction.operand);
+                const Value& acj_val = regs_ptr[acj_reg];
+                const std::int64_t acj_addi = unpack_r_si_acj_addi(instruction.operand);
+                const std::int64_t acj_limit = unpack_r_si_acj_limit(instruction.operand);
+                if (acj_val.is_int()) {
+                    const std::int64_t acj_new = acj_val.as_int() + acj_addi;
+                    if (acj_new >= Value::kIntMin && acj_new <= Value::kIntMax) {
+                        regs_ptr[acj_reg] = Value::integer(acj_new);
+                        if (acj_new < acj_limit) {
+                            ip = static_cast<std::size_t>(instruction.ic_slot);
+                        } else {
+                            ++ip;
+                        }
+                        break;
+                    }
+                }
+                { const Span span = instruction_span(instruction);
+                const Value acj_addi_val = Value::integer(acj_addi);
+                ZEPHYR_TRY_ASSIGN(acj_new_val, binary_fast_or_fallback(BytecodeOp::R_ADD, acj_val, acj_addi_val, span));
+                regs_ptr[acj_reg] = acj_new_val;
+                const Value acj_limit_val = Value::integer(acj_limit);
+                ZEPHYR_TRY_ASSIGN(acj_cmp, binary_fast_or_fallback(BytecodeOp::R_LT, acj_new_val, acj_limit_val, span));
+                if (is_truthy(acj_cmp)) { ip = static_cast<std::size_t>(instruction.ic_slot); } else { ++ip; } }
+                break;
+            }
+            case BytecodeOp::R_SI_LOOP_STEP: {
+                const std::int64_t ls_div   = static_cast<std::int64_t>(instruction.operand_a);
+                const std::int64_t ls_step  = static_cast<std::int64_t>(static_cast<std::int8_t>(instruction.src1));
+                const std::int64_t ls_limit = unpack_r_si_ls_limit(instruction.ic_slot);
+                const std::size_t  ls_body  = unpack_r_si_ls_body(instruction.ic_slot);
+                Value& ls_acc  = regs_ptr[instruction.dst];
+                Value& ls_iter = regs_ptr[instruction.src2];
+                if (ls_acc.is_int() && ls_iter.is_int()) {
+                    const std::int64_t ls_a = ls_acc.as_int();
+                    const std::int64_t ls_i = ls_iter.as_int();
+                    const std::int64_t ls_new_acc  = ls_a + (ls_i % ls_div);
+                    const std::int64_t ls_new_iter = ls_i + ls_step;
+                    if (ls_new_acc >= Value::kIntMin && ls_new_acc <= Value::kIntMax &&
+                        ls_new_iter >= Value::kIntMin && ls_new_iter <= Value::kIntMax) {
+                        ls_acc  = Value::integer(ls_new_acc);
+                        ls_iter = Value::integer(ls_new_iter);
+                        ip = (ls_new_iter < ls_limit) ? ls_body : ip + 1;
+                        break;
+                    }
+                }
+                { const Span ls_span = instruction_span(instruction);
+                const Value ls_div_val  = Value::integer(ls_div);
+                ZEPHYR_TRY_ASSIGN(ls_mod, binary_fast_or_fallback(BytecodeOp::R_MOD, ls_iter, ls_div_val, ls_span));
+                ZEPHYR_TRY_ASSIGN(ls_new_acc, binary_fast_or_fallback(BytecodeOp::R_ADD, ls_acc, ls_mod, ls_span));
+                ls_acc = ls_new_acc;
+                const Value ls_step_val = Value::integer(ls_step);
+                ZEPHYR_TRY_ASSIGN(ls_new_iter, binary_fast_or_fallback(BytecodeOp::R_ADD, ls_iter, ls_step_val, ls_span));
+                ls_iter = ls_new_iter;
+                const Value ls_limit_val = Value::integer(ls_limit);
+                ZEPHYR_TRY_ASSIGN(ls_cmp, binary_fast_or_fallback(BytecodeOp::R_LT, ls_new_iter, ls_limit_val, ls_span));
+                ip = is_truthy(ls_cmp) ? ls_body : ip + 1; }
+                break;
+            }
             case BytecodeOp::R_LOAD_GLOBAL: {
                 const Span span = instruction_span(instruction);
                 ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
@@ -2742,6 +2861,149 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ++ip;
                 break;
             }
+            case BytecodeOp::R_LOAD_MEMBER: {
+                const Value& lm_obj = regs_ptr[instruction.src1];
+                const Span lm_span = instruction_span(instruction);
+                if (lm_obj.is_host_handle()) {
+                    ZEPHYR_TRY_ASSIGN(lm_res, resolve_host_handle(lm_obj, lm_span, module.name, "member access"));
+                    const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
+                    const ZephyrHostClass::Getter* lm_getter = nullptr;
+                    if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                        lm_getter = lm_class->get_getter_at(instruction.ic_slot);
+                    } else {
+                        std::uint32_t lm_idx = 0;
+                        lm_getter = lm_class->find_getter_ic(metadata_ptr[ip].string_operand, lm_idx);
+                        if (lm_getter != nullptr) {
+                            instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
+                            instruction.ic_slot = lm_idx;
+                        }
+                    }
+                    if (lm_getter != nullptr) {
+                        try {
+                            regs_ptr[instruction.dst] = from_public_value((*lm_getter)(lm_res.instance));
+                        } catch (const std::exception& e) {
+                            return make_loc_error<Value>(module.name, lm_span, e.what());
+                        }
+                        ++ip; break;
+                    }
+                }
+                ZEPHYR_TRY_ASSIGN(lm_result, load_member_value(lm_obj, instruction, metadata_ptr[ip], module.name));
+                regs_ptr[instruction.dst] = lm_result;
+                ++ip; break;
+            }
+            case BytecodeOp::R_STORE_MEMBER: {
+                const Value& sm_obj = regs_ptr[instruction.src1];
+                const Value& sm_val = regs_ptr[instruction.src2];
+                ZEPHYR_TRY_ASSIGN(sm_result, store_member_value(sm_obj, sm_val, instruction, metadata_ptr[ip], module.name));
+                (void)sm_result;
+                ++ip; break;
+            }
+            case BytecodeOp::R_CALL_MEMBER: {
+                const Value& cm_obj = regs_ptr[instruction.src1];
+                const Span cm_span = instruction_span(instruction);
+                if (cm_obj.is_host_handle()) {
+                    ZEPHYR_TRY_ASSIGN(cm_res, resolve_host_handle(cm_obj, cm_span, module.name, "method call"));
+                    const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
+                    const ZephyrHostClass::Method* cm_method = nullptr;
+                    if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                        cm_method = cm_class->get_method_at(instruction.ic_slot);
+                    } else {
+                        std::uint32_t cm_idx = 0;
+                        cm_method = cm_class->find_method_ic(metadata_ptr[ip].string_operand, cm_idx);
+                        if (cm_method != nullptr) {
+                            instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
+                            instruction.ic_slot = cm_idx;
+                        }
+                    }
+                    if (cm_method != nullptr) {
+                        const std::uint8_t cm_argc = instruction.operand_a;
+                        auto cm_lease = acquire_public_args_buffer(cm_argc);
+                        auto& cm_public_args = cm_lease.args();
+                        for (std::uint8_t i = 0; i < cm_argc; ++i) {
+                            cm_public_args.push_back(to_public_value(regs_ptr[static_cast<std::size_t>(instruction.src2 + i)]));
+                        }
+                        try {
+                            regs_ptr[instruction.dst] = from_public_value((*cm_method)(cm_res.instance, cm_public_args));
+                        } catch (const std::exception& e) {
+                            return make_loc_error<Value>(module.name, cm_span, e.what());
+                        }
+                        ++ip; break;
+                    }
+                }
+                {
+                    std::vector<Value> cm_args;
+                    cm_args.reserve(instruction.operand_a);
+                    for (std::uint8_t i = 0; i < instruction.operand_a; ++i)
+                        cm_args.push_back(regs_ptr[static_cast<std::size_t>(instruction.src2 + i)]);
+                    ZEPHYR_TRY_ASSIGN(cm_result, call_member_value(cm_obj, metadata_ptr[ip].string_operand, cm_args, cm_span, module.name));
+                    regs_ptr[instruction.dst] = cm_result;
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_BUILD_STRUCT: {
+                const std::uint8_t bs_count = instruction.operand_a;
+                // IC fast path: StructTypeObject* cached, fields are in-order
+                if (instruction.ic_shape != nullptr && instruction.ic_slot == 1) {
+                    auto* bs_type = reinterpret_cast<StructTypeObject*>(instruction.ic_shape);
+                    auto* bs_inst = allocate<StructInstanceObject>(bs_type);
+                    // Inline initialize_struct_instance using cached shape
+                    bs_inst->shape = bs_type->cached_shape;
+                    bs_inst->field_values.reserve(bs_count);
+                    for (std::uint8_t i = 0; i < bs_count; ++i) {
+                        const Value& bs_val = regs_ptr[static_cast<std::size_t>(instruction.src1 + i)];
+                        bs_inst->field_values.push_back(bs_val);
+                        note_struct_field_write(bs_inst, i, bs_val);
+                    }
+                    regs_ptr[instruction.dst] = Value::object(bs_inst);
+                    ++ip; break;
+                }
+                // Cold path
+                {
+                    const Span bs_span = instruction_span(instruction);
+                    std::vector<Value> bs_fields(bs_count);
+                    for (std::uint8_t i = 0; i < bs_count; ++i)
+                        bs_fields[i] = regs_ptr[static_cast<std::size_t>(instruction.src1 + i)];
+                    ZEPHYR_TRY_ASSIGN(bs_result, build_struct_value(call_env, metadata_ptr[ip].string_operand,
+                                                                    metadata_ptr[ip].names, bs_fields, bs_span, module.name));
+                    regs_ptr[instruction.dst] = bs_result;
+                    // Populate IC on first call if fields are in declared order
+                    if (bs_result.is_object() && bs_result.as_object()->kind == ObjectKind::StructInstance) {
+                        auto* bs_inst_ic = static_cast<StructInstanceObject*>(bs_result.as_object());
+                        StructTypeObject* bs_type_ic = bs_inst_ic->type;
+                        const auto& bs_names = metadata_ptr[ip].names;
+                        bool bs_in_order = (bs_names.size() == bs_type_ic->fields.size());
+                        if (bs_in_order) {
+                            for (std::size_t k = 0; k < bs_names.size(); ++k) {
+                                if (bs_names[k] != bs_type_ic->fields[k].name) { bs_in_order = false; break; }
+                            }
+                        }
+                        if (bs_in_order) {
+                            instruction.ic_shape = reinterpret_cast<Shape*>(bs_type_ic);
+                            instruction.ic_slot = 1;
+                        }
+                    }
+                }
+                ++ip; break;
+            }
+            case BytecodeOp::R_BUILD_ARRAY: {
+                const std::uint8_t ba_count = instruction.operand_a;
+                auto* ba_array = allocate<ArrayObject>();
+                ba_array->elements.resize(ba_count);
+                for (std::uint8_t i = 0; i < ba_count; ++i) {
+                    ba_array->elements[i] = regs_ptr[static_cast<std::size_t>(instruction.src1 + i)];
+                    note_array_element_write(ba_array, i, ba_array->elements[i]);
+                }
+                regs_ptr[instruction.dst] = Value::object(ba_array);
+                ++ip; break;
+            }
+            case BytecodeOp::R_LOAD_INDEX: {
+                const Value& li_obj = regs_ptr[instruction.src1];
+                const Value& li_idx = regs_ptr[instruction.src2];
+                const Span li_span = instruction_span(instruction);
+                ZEPHYR_TRY_ASSIGN(li_result, get_index_value(li_obj, li_idx, li_span, module.name));
+                regs_ptr[instruction.dst] = li_result;
+                ++ip; break;
+            }
             case BytecodeOp::R_RETURN:
                 return regs_ptr[instruction.src1];
             case BytecodeOp::R_JUMP:
@@ -2787,8 +3049,24 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ZEPHYR_TRY_ASSIGN(src2, register_index(instruction.src2, span));
                 ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(fused_op, regs_ptr[src1], regs_ptr[src2], span));
                 regs_ptr[dst] = result; }
-                ++ip;
-                break;
+                ++ip; break;
+            }
+            case BytecodeOp::R_SI_MODI_ADD_STORE: {
+                const Value& sma_acc = regs_ptr[instruction.src1];
+                const Value& sma_src = regs_ptr[instruction.src2];
+                const std::int64_t sma_div = static_cast<std::int64_t>(instruction.operand_a);
+                if (sma_acc.is_int() && sma_src.is_int()) {
+                    const std::int64_t sma_r = sma_acc.as_int() + (sma_src.as_int() % sma_div);
+                    if (sma_r >= Value::kIntMin && sma_r <= Value::kIntMax) {
+                        regs_ptr[instruction.dst] = Value::integer(sma_r); ++ip; break;
+                    }
+                }
+                { const Span sma_span = instruction_span(instruction);
+                const Value sma_div_val = Value::integer(sma_div);
+                ZEPHYR_TRY_ASSIGN(sma_mod, binary_fast_or_fallback(BytecodeOp::R_MOD, sma_src, sma_div_val, sma_span));
+                ZEPHYR_TRY_ASSIGN(sma_result, binary_fast_or_fallback(BytecodeOp::R_ADD, sma_acc, sma_mod, sma_span));
+                regs_ptr[instruction.dst] = sma_result; }
+                ++ip; break;
             }
             case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
                 const std::uint8_t cmp_s1 = unpack_r_si_cmp_jump_false_src1(instruction.operand);
@@ -2835,6 +3113,46 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 } else {
                     ++ip;
                 } }
+                break;
+            }
+            case BytecodeOp::R_SI_CMPI_JUMP_FALSE: {
+                const std::uint8_t cmpi_s1 = unpack_r_si_cmpi_jump_false_src1(instruction.operand);
+                const std::int64_t cmpi_imm = unpack_r_si_cmpi_jump_false_imm(instruction.operand);
+                const auto cmpi_kind = unpack_r_si_cmpi_jump_false_kind(instruction.operand);
+                const Value& cmpi_lhs = regs_ptr[cmpi_s1];
+                if (cmpi_lhs.is_int()) {
+                    const std::int64_t a = cmpi_lhs.as_int();
+                    bool cmp_val;
+                    switch (cmpi_kind) {
+                    case SuperinstructionCompareKind::Less:         cmp_val = a < cmpi_imm;  break;
+                    case SuperinstructionCompareKind::LessEqual:    cmp_val = a <= cmpi_imm; break;
+                    case SuperinstructionCompareKind::Greater:      cmp_val = a > cmpi_imm;  break;
+                    case SuperinstructionCompareKind::GreaterEqual: cmp_val = a >= cmpi_imm; break;
+                    case SuperinstructionCompareKind::Equal:        cmp_val = a == cmpi_imm; break;
+                    case SuperinstructionCompareKind::NotEqual:     cmp_val = a != cmpi_imm; break;
+                    default:                                         cmp_val = false; break;
+                    }
+                    if (cmp_val) {
+                        ++ip;
+                    } else {
+                        const InstructionMetadata& cmpi_meta = metadata_ptr[ip];
+                        ip = cmpi_meta.jump_table.empty() ? ip + 1 : static_cast<std::size_t>(cmpi_meta.jump_table.front());
+                    }
+                    break;
+                }
+                { const InstructionMetadata& cmpi_meta = metadata_ptr[ip];
+                if (cmpi_meta.jump_table.empty()) {
+                    const Span span = instruction_span(instruction);
+                    return make_loc_error<Value>(module.name, span, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
+                }
+                const Span span = instruction_span(instruction);
+                const BytecodeOp cmpi_op = register_bytecode_op_from_superinstruction_compare_kind(cmpi_kind);
+                ZEPHYR_TRY_ASSIGN(cmpi_src, register_index(cmpi_s1, span));
+                const Value cmpi_rhs_val = Value::integer(cmpi_imm);
+                ZEPHYR_TRY_ASSIGN(cmpi_result, binary_fast_or_fallback(cmpi_op, regs_ptr[cmpi_src], cmpi_rhs_val, span));
+                if (!is_truthy(cmpi_result)) {
+                    ip = static_cast<std::size_t>(cmpi_meta.jump_table.front());
+                } else { ++ip; } }
                 break;
             }
             case BytecodeOp::R_SI_LOAD_ADD_STORE: {
@@ -4668,6 +4986,119 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             ++local_ip;
             break;
         }
+        case BytecodeOp::R_LOAD_INT: {
+            regs_ptr[unpack_r_load_int_dst(instr.operand)] =
+                Value::integer(unpack_r_load_int_value(instr.operand));
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_ADDI: {
+            const Value& addi_src = regs_ptr[unpack_r_addi_src(instr.operand)];
+            const std::int64_t addi_imm = unpack_r_addi_imm(instr.operand);
+            if (addi_src.is_int()) {
+                const std::int64_t sum = addi_src.as_int() + addi_imm;
+                if (sum >= Value::kIntMin && sum <= Value::kIntMax) {
+                    regs_ptr[unpack_r_addi_dst(instr.operand)] = Value::integer(sum);
+                    ++local_ip;
+                    break;
+                }
+            }
+            { const Span s = instruction_span(instr);
+            const Value imm_val = Value::integer(addi_imm);
+            ZEPHYR_TRY_ASSIGN(addi_r, apply_binary_op(TokenType::Plus, addi_src, imm_val, s, module_name));
+            regs_ptr[unpack_r_addi_dst(instr.operand)] = addi_r; }
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_MODI: {
+            const Value& modi_src = regs_ptr[unpack_r_modi_src(instr.operand)];
+            const std::int64_t modi_imm = unpack_r_modi_imm(instr.operand);
+            if (modi_src.is_int() && modi_imm > 0) {
+                regs_ptr[unpack_r_modi_dst(instr.operand)] = Value::integer(modi_src.as_int() % modi_imm);
+                ++local_ip;
+                break;
+            }
+            { const Span s = instruction_span(instr);
+            const Value imm_val = Value::integer(modi_imm);
+            ZEPHYR_TRY_ASSIGN(modi_r, apply_binary_op(TokenType::Percent, modi_src, imm_val, s, module_name));
+            regs_ptr[unpack_r_modi_dst(instr.operand)] = modi_r; }
+            ++local_ip;
+            break;
+        }
+        case BytecodeOp::R_ADDI_JUMP: {
+            const Value& aj_src = regs_ptr[unpack_r_addi_src(instr.operand)];
+            const std::int64_t aj_imm = unpack_r_addi_imm(instr.operand);
+            if (aj_src.is_int()) {
+                const std::int64_t aj_sum = aj_src.as_int() + aj_imm;
+                if (aj_sum >= Value::kIntMin && aj_sum <= Value::kIntMax) {
+                    regs_ptr[unpack_r_addi_dst(instr.operand)] = Value::integer(aj_sum);
+                    local_ip = static_cast<std::size_t>(instr.ic_slot);
+                    break;
+                }
+            }
+            { const Span s = instruction_span(instr);
+            const Value imm_val = Value::integer(aj_imm);
+            ZEPHYR_TRY_ASSIGN(aj_r, apply_binary_op(TokenType::Plus, aj_src, imm_val, s, module_name));
+            regs_ptr[unpack_r_addi_dst(instr.operand)] = aj_r; }
+            local_ip = static_cast<std::size_t>(instr.ic_slot);
+            break;
+        }
+        case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP: {
+            const std::uint8_t acj_reg = unpack_r_si_acj_reg(instr.operand);
+            const Value& acj_val = regs_ptr[acj_reg];
+            const std::int64_t acj_addi = unpack_r_si_acj_addi(instr.operand);
+            const std::int64_t acj_limit = unpack_r_si_acj_limit(instr.operand);
+            if (acj_val.is_int()) {
+                const std::int64_t acj_new = acj_val.as_int() + acj_addi;
+                if (acj_new >= Value::kIntMin && acj_new <= Value::kIntMax) {
+                    regs_ptr[acj_reg] = Value::integer(acj_new);
+                    if (acj_new < acj_limit) { local_ip = static_cast<std::size_t>(instr.ic_slot); }
+                    else { ++local_ip; }
+                    break;
+                }
+            }
+            { const Span s = instruction_span(instr);
+            const Value acj_addi_val = Value::integer(acj_addi);
+            ZEPHYR_TRY_ASSIGN(acj_new_val, apply_binary_op(TokenType::Plus, acj_val, acj_addi_val, s, module_name));
+            regs_ptr[acj_reg] = acj_new_val;
+            const Value acj_limit_val = Value::integer(acj_limit);
+            ZEPHYR_TRY_ASSIGN(acj_cmp, apply_binary_op(TokenType::Less, acj_new_val, acj_limit_val, s, module_name));
+            if (is_truthy(acj_cmp)) { local_ip = static_cast<std::size_t>(instr.ic_slot); } else { ++local_ip; } }
+            break;
+        }
+        case BytecodeOp::R_SI_LOOP_STEP: {
+            const std::int64_t ls_div   = static_cast<std::int64_t>(instr.operand_a);
+            const std::int64_t ls_step  = static_cast<std::int64_t>(static_cast<std::int8_t>(instr.src1));
+            const std::int64_t ls_limit = unpack_r_si_ls_limit(instr.ic_slot);
+            const std::size_t  ls_body  = unpack_r_si_ls_body(instr.ic_slot);
+            Value& ls_acc  = regs_ptr[instr.dst];
+            Value& ls_iter = regs_ptr[instr.src2];
+            if (ls_acc.is_int() && ls_iter.is_int()) {
+                const std::int64_t ls_a = ls_acc.as_int();
+                const std::int64_t ls_i = ls_iter.as_int();
+                const std::int64_t ls_new_acc  = ls_a + (ls_i % ls_div);
+                const std::int64_t ls_new_iter = ls_i + ls_step;
+                if (ls_new_acc >= Value::kIntMin && ls_new_acc <= Value::kIntMax &&
+                    ls_new_iter >= Value::kIntMin && ls_new_iter <= Value::kIntMax) {
+                    ls_acc  = Value::integer(ls_new_acc);
+                    ls_iter = Value::integer(ls_new_iter);
+                    local_ip = (ls_new_iter < ls_limit) ? ls_body : local_ip + 1;
+                    break;
+                }
+            }
+            { const Span s = instruction_span(instr);
+            const Value ls_div_val  = Value::integer(ls_div);
+            ZEPHYR_TRY_ASSIGN(ls_mod, apply_binary_op(TokenType::Percent, ls_iter, ls_div_val, s, module_name));
+            ZEPHYR_TRY_ASSIGN(ls_new_acc, apply_binary_op(TokenType::Plus, ls_acc, ls_mod, s, module_name));
+            ls_acc = ls_new_acc;
+            const Value ls_step_val = Value::integer(ls_step);
+            ZEPHYR_TRY_ASSIGN(ls_new_iter, apply_binary_op(TokenType::Plus, ls_iter, ls_step_val, s, module_name));
+            ls_iter = ls_new_iter;
+            const Value ls_limit_val = Value::integer(ls_limit);
+            ZEPHYR_TRY_ASSIGN(ls_cmp, apply_binary_op(TokenType::Less, ls_new_iter, ls_limit_val, s, module_name));
+            local_ip = is_truthy(ls_cmp) ? ls_body : local_ip + 1; }
+            break;
+        }
         case BytecodeOp::R_LOAD_GLOBAL: {
             const int slot = unpack_r_index_operand(instr.operand);
             bool found = false;
@@ -4854,6 +5285,146 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             ++local_ip;
             break;
         }
+        case BytecodeOp::R_LOAD_MEMBER: {
+            const Value& lm_obj = regs_ptr[instr.src1];
+            const Span lm_span = instruction_span(instr);
+            if (lm_obj.is_host_handle()) {
+                ZEPHYR_TRY_ASSIGN(lm_res, resolve_host_handle(lm_obj, lm_span, module_name, "member access"));
+                const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
+                const ZephyrHostClass::Getter* lm_getter = nullptr;
+                if (instr.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                    lm_getter = lm_class->get_getter_at(instr.ic_slot);
+                } else {
+                    std::uint32_t lm_idx = 0;
+                    lm_getter = lm_class->find_getter_ic(metadata_ptr[local_ip].string_operand, lm_idx);
+                    if (lm_getter != nullptr) {
+                        instr.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
+                        instr.ic_slot = lm_idx;
+                    }
+                }
+                if (lm_getter != nullptr) {
+                    try {
+                        regs_ptr[instr.dst] = from_public_value((*lm_getter)(lm_res.instance));
+                    } catch (const std::exception& e) {
+                        return make_loc_error<CoroutineExecutionResult>(module_name, lm_span, e.what());
+                    }
+                    ++local_ip; break;
+                }
+            }
+            ZEPHYR_TRY_ASSIGN(lm_result, load_member_value(lm_obj, instr, metadata_ptr[local_ip], module_name));
+            regs_ptr[instr.dst] = lm_result;
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_STORE_MEMBER: {
+            const Value& sm_obj = regs_ptr[instr.src1];
+            const Value& sm_val = regs_ptr[instr.src2];
+            ZEPHYR_TRY_ASSIGN(sm_result, store_member_value(sm_obj, sm_val, instr, metadata_ptr[local_ip], module_name));
+            (void)sm_result;
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_CALL_MEMBER: {
+            const Value& cm_obj = regs_ptr[instr.src1];
+            const Span cm_span = instruction_span(instr);
+            if (cm_obj.is_host_handle()) {
+                ZEPHYR_TRY_ASSIGN(cm_res, resolve_host_handle(cm_obj, cm_span, module_name, "method call"));
+                const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
+                const ZephyrHostClass::Method* cm_method = nullptr;
+                if (instr.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                    cm_method = cm_class->get_method_at(instr.ic_slot);
+                } else {
+                    std::uint32_t cm_idx = 0;
+                    cm_method = cm_class->find_method_ic(metadata_ptr[local_ip].string_operand, cm_idx);
+                    if (cm_method != nullptr) {
+                        instr.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
+                        instr.ic_slot = cm_idx;
+                    }
+                }
+                if (cm_method != nullptr) {
+                    const std::uint8_t cm_argc = instr.operand_a;
+                    auto cm_lease = acquire_public_args_buffer(cm_argc);
+                    auto& cm_public_args = cm_lease.args();
+                    for (std::uint8_t i = 0; i < cm_argc; ++i) {
+                        cm_public_args.push_back(to_public_value(regs_ptr[static_cast<std::size_t>(instr.src2 + i)]));
+                    }
+                    try {
+                        regs_ptr[instr.dst] = from_public_value((*cm_method)(cm_res.instance, cm_public_args));
+                    } catch (const std::exception& e) {
+                        return make_loc_error<CoroutineExecutionResult>(module_name, cm_span, e.what());
+                    }
+                    ++local_ip; break;
+                }
+            }
+            {
+                std::vector<Value> cm_args;
+                cm_args.reserve(instr.operand_a);
+                for (std::uint8_t i = 0; i < instr.operand_a; ++i)
+                    cm_args.push_back(regs_ptr[static_cast<std::size_t>(instr.src2 + i)]);
+                ZEPHYR_TRY_ASSIGN(cm_result, call_member_value(cm_obj, metadata_ptr[local_ip].string_operand, cm_args, cm_span, module_name));
+                regs_ptr[instr.dst] = cm_result;
+            }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_BUILD_STRUCT: {
+            const std::uint8_t bs_count = instr.operand_a;
+            // IC fast path
+            if (instr.ic_shape != nullptr && instr.ic_slot == 1) {
+                auto* bs_type = reinterpret_cast<StructTypeObject*>(instr.ic_shape);
+                auto* bs_inst = allocate<StructInstanceObject>(bs_type);
+                bs_inst->shape = bs_type->cached_shape;
+                bs_inst->field_values.reserve(bs_count);
+                for (std::uint8_t i = 0; i < bs_count; ++i) {
+                    const Value& bs_val = regs_ptr[static_cast<std::size_t>(instr.src1 + i)];
+                    bs_inst->field_values.push_back(bs_val);
+                    note_struct_field_write(bs_inst, i, bs_val);
+                }
+                regs_ptr[instr.dst] = Value::object(bs_inst);
+                ++local_ip; break;
+            }
+            {
+                const Span bs_span = instruction_span(instr);
+                std::vector<Value> bs_fields(bs_count);
+                for (std::uint8_t i = 0; i < bs_count; ++i)
+                    bs_fields[i] = regs_ptr[static_cast<std::size_t>(instr.src1 + i)];
+                ZEPHYR_TRY_ASSIGN(bs_result, build_struct_value(frame_ptr->current_env, metadata_ptr[local_ip].string_operand,
+                                                                metadata_ptr[local_ip].names, bs_fields, bs_span, module_name));
+                regs_ptr[instr.dst] = bs_result;
+                if (bs_result.is_object() && bs_result.as_object()->kind == ObjectKind::StructInstance) {
+                    auto* bs_inst_ic = static_cast<StructInstanceObject*>(bs_result.as_object());
+                    StructTypeObject* bs_type_ic = bs_inst_ic->type;
+                    const auto& bs_names = metadata_ptr[local_ip].names;
+                    bool bs_in_order = (bs_names.size() == bs_type_ic->fields.size());
+                    if (bs_in_order) {
+                        for (std::size_t k = 0; k < bs_names.size(); ++k) {
+                            if (bs_names[k] != bs_type_ic->fields[k].name) { bs_in_order = false; break; }
+                        }
+                    }
+                    if (bs_in_order) {
+                        instr.ic_shape = reinterpret_cast<Shape*>(bs_type_ic);
+                        instr.ic_slot = 1;
+                    }
+                }
+            }
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_BUILD_ARRAY: {
+            const std::uint8_t ba_count = instr.operand_a;
+            auto* ba_array = allocate<ArrayObject>();
+            ba_array->elements.resize(ba_count);
+            for (std::uint8_t i = 0; i < ba_count; ++i) {
+                ba_array->elements[i] = regs_ptr[static_cast<std::size_t>(instr.src1 + i)];
+                note_array_element_write(ba_array, i, ba_array->elements[i]);
+            }
+            regs_ptr[instr.dst] = Value::object(ba_array);
+            ++local_ip; break;
+        }
+        case BytecodeOp::R_LOAD_INDEX: {
+            const Value& li_obj = regs_ptr[instr.src1];
+            const Value& li_idx = regs_ptr[instr.src2];
+            const Span li_span = instruction_span(instr);
+            ZEPHYR_TRY_ASSIGN(li_result, get_index_value(li_obj, li_idx, li_span, module_name));
+            regs_ptr[instr.dst] = li_result;
+            ++local_ip; break;
+        }
         case BytecodeOp::R_JUMP:
             local_ip = static_cast<std::size_t>(instr.operand);
             break;
@@ -4902,6 +5473,21 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             { const Span s = instruction_span(instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Star, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
             ++local_ip; break;
         }
+        case BytecodeOp::R_SI_MODI_ADD_STORE: {
+            const Value& sma_acc = regs_ptr[instr.src1];
+            const Value& sma_src = regs_ptr[instr.src2];
+            const std::int64_t sma_div = static_cast<std::int64_t>(instr.operand_a);
+            if (sma_acc.is_int() && sma_src.is_int()) {
+                const std::int64_t sma_r = sma_acc.as_int() + (sma_src.as_int() % sma_div);
+                if (sma_r >= Value::kIntMin && sma_r <= Value::kIntMax) { regs_ptr[instr.dst] = Value::integer(sma_r); ++local_ip; break; }
+            }
+            { const Span s = instruction_span(instr);
+            const Value sma_div_val = Value::integer(sma_div);
+            ZEPHYR_TRY_ASSIGN(sma_mod, apply_binary_op(TokenType::Percent, sma_src, sma_div_val, s, module_name));
+            ZEPHYR_TRY_ASSIGN(sma_result, apply_binary_op(TokenType::Plus, sma_acc, sma_mod, s, module_name));
+            regs_ptr[instr.dst] = sma_result; }
+            ++local_ip; break;
+        }
         case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
             const BytecodeOp cmp_op = unpack_r_si_cmp_jump_false_compare_op(instr.operand);
             const std::uint8_t s1 = unpack_r_si_cmp_jump_false_src1(instr.operand);
@@ -4947,6 +5533,51 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
                 if (!is_truthy(cmp_result)) { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
                 else { ++local_ip; }
             }
+            break;
+        }
+        case BytecodeOp::R_SI_CMPI_JUMP_FALSE: {
+            const std::uint8_t cmpi_s1 = unpack_r_si_cmpi_jump_false_src1(instr.operand);
+            const std::int64_t cmpi_imm = unpack_r_si_cmpi_jump_false_imm(instr.operand);
+            const auto cmpi_kind = unpack_r_si_cmpi_jump_false_kind(instr.operand);
+            const Value& cmpi_lhs = regs_ptr[cmpi_s1];
+            if (cmpi_lhs.is_int()) {
+                const std::int64_t a = cmpi_lhs.as_int();
+                bool cmp_val;
+                switch (cmpi_kind) {
+                case SuperinstructionCompareKind::Less:         cmp_val = a < cmpi_imm;  break;
+                case SuperinstructionCompareKind::LessEqual:    cmp_val = a <= cmpi_imm; break;
+                case SuperinstructionCompareKind::Greater:      cmp_val = a > cmpi_imm;  break;
+                case SuperinstructionCompareKind::GreaterEqual: cmp_val = a >= cmpi_imm; break;
+                case SuperinstructionCompareKind::Equal:        cmp_val = a == cmpi_imm; break;
+                case SuperinstructionCompareKind::NotEqual:     cmp_val = a != cmpi_imm; break;
+                default:                                         cmp_val = false; break;
+                }
+                if (cmp_val) { ++local_ip; }
+                else {
+                    const InstructionMetadata& cmpi_meta = metadata_ptr[local_ip];
+                    local_ip = cmpi_meta.jump_table.empty() ? local_ip + 1 : static_cast<std::size_t>(cmpi_meta.jump_table.front());
+                }
+                break;
+            }
+            { const Span s = instruction_span(instr);
+            if (metadata_ptr[local_ip].jump_table.empty()) {
+                return make_loc_error<CoroutineExecutionResult>(module_name, s, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
+            }
+            const BytecodeOp cmpi_op = register_bytecode_op_from_superinstruction_compare_kind(cmpi_kind);
+            const Value cmpi_rhs_val = Value::integer(cmpi_imm);
+            TokenType cmpi_token = TokenType::Less;
+            switch (cmpi_op) {
+            case BytecodeOp::R_LT: cmpi_token = TokenType::Less; break;
+            case BytecodeOp::R_LE: cmpi_token = TokenType::LessEqual; break;
+            case BytecodeOp::R_GT: cmpi_token = TokenType::Greater; break;
+            case BytecodeOp::R_GE: cmpi_token = TokenType::GreaterEqual; break;
+            case BytecodeOp::R_EQ: cmpi_token = TokenType::EqualEqual; break;
+            case BytecodeOp::R_NE: cmpi_token = TokenType::BangEqual; break;
+            default: break;
+            }
+            ZEPHYR_TRY_ASSIGN(cmpi_result, apply_binary_op(cmpi_token, cmpi_lhs, cmpi_rhs_val, s, module_name));
+            if (!is_truthy(cmpi_result)) { local_ip = static_cast<std::size_t>(metadata_ptr[local_ip].jump_table.front()); }
+            else { ++local_ip; } }
             break;
         }
         case BytecodeOp::R_SI_LOAD_ADD_STORE: {
@@ -5504,6 +6135,122 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ++local_ip;
                     break;
                 }
+                case BytecodeOp::R_LOAD_INT: {
+                    ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_load_int_dst(instruction.operand), span));
+                    regs_ptr[dst] = Value::integer(unpack_r_load_int_value(instruction.operand));
+                    ++local_ip;
+                    break;
+                }
+                case BytecodeOp::R_ADDI: {
+                    ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_addi_dst(instruction.operand), span));
+                    ZEPHYR_TRY_ASSIGN(src_idx, register_index(unpack_r_addi_src(instruction.operand), span));
+                    const Value& addi_src = regs_ptr[src_idx];
+                    const std::int64_t addi_imm = unpack_r_addi_imm(instruction.operand);
+                    if (addi_src.is_int()) {
+                        const std::int64_t sum = addi_src.as_int() + addi_imm;
+                        if (sum >= Value::kIntMin && sum <= Value::kIntMax) {
+                            regs_ptr[dst] = Value::integer(sum);
+                            ++local_ip;
+                            break;
+                        }
+                    }
+                    { const Value imm_val = Value::integer(addi_imm);
+                    ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, addi_src, imm_val, span));
+                    regs_ptr[dst] = result; }
+                    ++local_ip;
+                    break;
+                }
+                case BytecodeOp::R_MODI: {
+                    ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_modi_dst(instruction.operand), span));
+                    ZEPHYR_TRY_ASSIGN(src_idx, register_index(unpack_r_modi_src(instruction.operand), span));
+                    const Value& modi_src = regs_ptr[src_idx];
+                    const std::int64_t modi_imm = unpack_r_modi_imm(instruction.operand);
+                    if (modi_src.is_int() && modi_imm > 0) {
+                        regs_ptr[dst] = Value::integer(modi_src.as_int() % modi_imm);
+                        ++local_ip;
+                        break;
+                    }
+                    { const Value imm_val = Value::integer(modi_imm);
+                    ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_MOD, modi_src, imm_val, span));
+                    regs_ptr[dst] = result; }
+                    ++local_ip;
+                    break;
+                }
+                case BytecodeOp::R_ADDI_JUMP: {
+                    ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_addi_dst(instruction.operand), span));
+                    ZEPHYR_TRY_ASSIGN(src_idx, register_index(unpack_r_addi_src(instruction.operand), span));
+                    const Value& aj_src = regs_ptr[src_idx];
+                    const std::int64_t aj_imm = unpack_r_addi_imm(instruction.operand);
+                    if (aj_src.is_int()) {
+                        const std::int64_t aj_sum = aj_src.as_int() + aj_imm;
+                        if (aj_sum >= Value::kIntMin && aj_sum <= Value::kIntMax) {
+                            regs_ptr[dst] = Value::integer(aj_sum);
+                            local_ip = static_cast<std::size_t>(instruction.ic_slot);
+                            break;
+                        }
+                    }
+                    { const Value imm_val = Value::integer(aj_imm);
+                    ZEPHYR_TRY_ASSIGN(result, binary_fast_or_fallback(BytecodeOp::R_ADD, aj_src, imm_val, span));
+                    regs_ptr[dst] = result; }
+                    local_ip = static_cast<std::size_t>(instruction.ic_slot);
+                    break;
+                }
+                case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP: {
+                    ZEPHYR_TRY_ASSIGN(acj_idx, register_index(unpack_r_si_acj_reg(instruction.operand), span));
+                    const Value& acj_val = regs_ptr[acj_idx];
+                    const std::int64_t acj_addi = unpack_r_si_acj_addi(instruction.operand);
+                    const std::int64_t acj_limit = unpack_r_si_acj_limit(instruction.operand);
+                    if (acj_val.is_int()) {
+                        const std::int64_t acj_new = acj_val.as_int() + acj_addi;
+                        if (acj_new >= Value::kIntMin && acj_new <= Value::kIntMax) {
+                            regs_ptr[acj_idx] = Value::integer(acj_new);
+                            if (acj_new < acj_limit) { local_ip = static_cast<std::size_t>(instruction.ic_slot); }
+                            else { ++local_ip; }
+                            break;
+                        }
+                    }
+                    { const Value acj_addi_val = Value::integer(acj_addi);
+                    ZEPHYR_TRY_ASSIGN(acj_new_val, binary_fast_or_fallback(BytecodeOp::R_ADD, acj_val, acj_addi_val, span));
+                    regs_ptr[acj_idx] = acj_new_val;
+                    const Value acj_limit_val = Value::integer(acj_limit);
+                    ZEPHYR_TRY_ASSIGN(acj_cmp, binary_fast_or_fallback(BytecodeOp::R_LT, acj_new_val, acj_limit_val, span));
+                    if (is_truthy(acj_cmp)) { local_ip = static_cast<std::size_t>(instruction.ic_slot); } else { ++local_ip; } }
+                    break;
+                }
+                case BytecodeOp::R_SI_LOOP_STEP: {
+                    ZEPHYR_TRY_ASSIGN(ls_acc_idx,  register_index(instruction.dst,  span));
+                    ZEPHYR_TRY_ASSIGN(ls_iter_idx, register_index(instruction.src2, span));
+                    const std::int64_t ls_div   = static_cast<std::int64_t>(instruction.operand_a);
+                    const std::int64_t ls_step  = static_cast<std::int64_t>(static_cast<std::int8_t>(instruction.src1));
+                    const std::int64_t ls_limit = unpack_r_si_ls_limit(instruction.ic_slot);
+                    const std::size_t  ls_body  = unpack_r_si_ls_body(instruction.ic_slot);
+                    Value& ls_acc  = regs_ptr[ls_acc_idx];
+                    Value& ls_iter = regs_ptr[ls_iter_idx];
+                    if (ls_acc.is_int() && ls_iter.is_int()) {
+                        const std::int64_t ls_a = ls_acc.as_int();
+                        const std::int64_t ls_i = ls_iter.as_int();
+                        const std::int64_t ls_new_acc  = ls_a + (ls_i % ls_div);
+                        const std::int64_t ls_new_iter = ls_i + ls_step;
+                        if (ls_new_acc >= Value::kIntMin && ls_new_acc <= Value::kIntMax &&
+                            ls_new_iter >= Value::kIntMin && ls_new_iter <= Value::kIntMax) {
+                            ls_acc  = Value::integer(ls_new_acc);
+                            ls_iter = Value::integer(ls_new_iter);
+                            local_ip = (ls_new_iter < ls_limit) ? ls_body : local_ip + 1;
+                            break;
+                        }
+                    }
+                    { const Value ls_div_val = Value::integer(ls_div);
+                    ZEPHYR_TRY_ASSIGN(ls_mod, binary_fast_or_fallback(BytecodeOp::R_MOD, ls_iter, ls_div_val, span));
+                    ZEPHYR_TRY_ASSIGN(ls_new_acc, binary_fast_or_fallback(BytecodeOp::R_ADD, ls_acc, ls_mod, span));
+                    ls_acc = ls_new_acc;
+                    const Value ls_step_val = Value::integer(ls_step);
+                    ZEPHYR_TRY_ASSIGN(ls_new_iter, binary_fast_or_fallback(BytecodeOp::R_ADD, ls_iter, ls_step_val, span));
+                    ls_iter = ls_new_iter;
+                    const Value ls_limit_val = Value::integer(ls_limit);
+                    ZEPHYR_TRY_ASSIGN(ls_cmp, binary_fast_or_fallback(BytecodeOp::R_LT, ls_new_iter, ls_limit_val, span));
+                    local_ip = is_truthy(ls_cmp) ? ls_body : local_ip + 1; }
+                    break;
+                }
                 case BytecodeOp::R_LOAD_GLOBAL: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_dst_operand(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(binding_pair, resolve_register_mode_global_binding(unpack_r_index_operand(instruction.operand), span));
@@ -5618,6 +6365,126 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     ++local_ip;
                     break;
                 }
+                case BytecodeOp::R_LOAD_MEMBER: {
+                    ZEPHYR_TRY_ASSIGN(lm_dst, register_index(instruction.dst, span));
+                    ZEPHYR_TRY_ASSIGN(lm_src, register_index(instruction.src1, span));
+                    const Value& lm_obj = regs_ptr[lm_src];
+                    if (lm_obj.is_host_handle()) {
+                        ZEPHYR_TRY_ASSIGN(lm_res, resolve_host_handle(lm_obj, span, module.name, "member access"));
+                        const ZephyrHostClass* lm_class = lm_res.entry->host_class.get();
+                        const ZephyrHostClass::Getter* lm_getter = nullptr;
+                        if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class))) {
+                            lm_getter = lm_class->get_getter_at(instruction.ic_slot);
+                        } else {
+                            std::uint32_t lm_idx = 0;
+                            lm_getter = lm_class->find_getter_ic(metadata.string_operand, lm_idx);
+                            if (lm_getter != nullptr) {
+                                instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(lm_class));
+                                instruction.ic_slot = lm_idx;
+                            }
+                        }
+                        if (lm_getter != nullptr) {
+                            try {
+                                regs_ptr[lm_dst] = from_public_value((*lm_getter)(lm_res.instance));
+                            } catch (const std::exception& e) {
+                                return make_loc_error<CoroutineExecutionResult>(module.name, span, e.what());
+                            }
+                            ++local_ip; break;
+                        }
+                    }
+                    ZEPHYR_TRY_ASSIGN(lm_result, load_member_value(lm_obj, instruction, metadata, module.name));
+                    regs_ptr[lm_dst] = lm_result;
+                    ++local_ip; break;
+                }
+                case BytecodeOp::R_STORE_MEMBER: {
+                    ZEPHYR_TRY_ASSIGN(sm_obj_idx, register_index(instruction.src1, span));
+                    ZEPHYR_TRY_ASSIGN(sm_val_idx, register_index(instruction.src2, span));
+                    const Value& sm_obj = regs_ptr[sm_obj_idx];
+                    const Value& sm_val = regs_ptr[sm_val_idx];
+                    ZEPHYR_TRY_ASSIGN(sm_result, store_member_value(sm_obj, sm_val, instruction, metadata, module.name));
+                    (void)sm_result;
+                    ++local_ip; break;
+                }
+                case BytecodeOp::R_CALL_MEMBER: {
+                    ZEPHYR_TRY_ASSIGN(cm_dst, register_index(instruction.dst, span));
+                    ZEPHYR_TRY_ASSIGN(cm_src, register_index(instruction.src1, span));
+                    const Value& cm_obj = regs_ptr[cm_src];
+                    if (cm_obj.is_host_handle()) {
+                        ZEPHYR_TRY_ASSIGN(cm_res, resolve_host_handle(cm_obj, span, module.name, "method call"));
+                        const ZephyrHostClass* cm_class = cm_res.entry->host_class.get();
+                        const ZephyrHostClass::Method* cm_method = nullptr;
+                        if (instruction.ic_shape == reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class))) {
+                            cm_method = cm_class->get_method_at(instruction.ic_slot);
+                        } else {
+                            std::uint32_t cm_idx = 0;
+                            cm_method = cm_class->find_method_ic(metadata.string_operand, cm_idx);
+                            if (cm_method != nullptr) {
+                                instruction.ic_shape = reinterpret_cast<Shape*>(const_cast<ZephyrHostClass*>(cm_class));
+                                instruction.ic_slot = cm_idx;
+                            }
+                        }
+                        if (cm_method != nullptr) {
+                            const std::uint8_t cm_argc = instruction.operand_a;
+                            auto cm_lease = acquire_public_args_buffer(cm_argc);
+                            auto& cm_public_args = cm_lease.args();
+                            for (std::uint8_t i = 0; i < cm_argc; ++i) {
+                                ZEPHYR_TRY_ASSIGN(cm_arg_reg, register_index(static_cast<std::uint8_t>(instruction.src2 + i), span));
+                                cm_public_args.push_back(to_public_value(regs_ptr[cm_arg_reg]));
+                            }
+                            try {
+                                regs_ptr[cm_dst] = from_public_value((*cm_method)(cm_res.instance, cm_public_args));
+                            } catch (const std::exception& e) {
+                                return make_loc_error<CoroutineExecutionResult>(module.name, span, e.what());
+                            }
+                            ++local_ip; break;
+                        }
+                    }
+                    {
+                        std::vector<Value> cm_args;
+                        cm_args.reserve(instruction.operand_a);
+                        for (std::uint8_t i = 0; i < instruction.operand_a; ++i) {
+                            ZEPHYR_TRY_ASSIGN(cm_arg_reg2, register_index(static_cast<std::uint8_t>(instruction.src2 + i), span));
+                            cm_args.push_back(regs_ptr[cm_arg_reg2]);
+                        }
+                        ZEPHYR_TRY_ASSIGN(cm_result, call_member_value(cm_obj, metadata.string_operand, cm_args, span, module.name));
+                        regs_ptr[cm_dst] = cm_result;
+                    }
+                    ++local_ip; break;
+                }
+                case BytecodeOp::R_BUILD_STRUCT: {
+                    ZEPHYR_TRY_ASSIGN(bs_dst, register_index(instruction.dst, span));
+                    const std::uint8_t bs_count = instruction.operand_a;
+                    std::vector<Value> bs_fields(bs_count);
+                    for (std::uint8_t i = 0; i < bs_count; ++i) {
+                        ZEPHYR_TRY_ASSIGN(bs_src, register_index(static_cast<std::uint8_t>(instruction.src1 + i), span));
+                        bs_fields[i] = regs_ptr[bs_src];
+                    }
+                    ZEPHYR_TRY_ASSIGN(bs_result, build_struct_value(frame().current_env, metadata.string_operand,
+                                                                    metadata.names, bs_fields, span, module.name));
+                    regs_ptr[bs_dst] = bs_result;
+                    ++local_ip; break;
+                }
+                case BytecodeOp::R_BUILD_ARRAY: {
+                    ZEPHYR_TRY_ASSIGN(ba_dst, register_index(instruction.dst, span));
+                    const std::uint8_t ba_count = instruction.operand_a;
+                    auto* ba_array = allocate<ArrayObject>();
+                    ba_array->elements.resize(ba_count);
+                    for (std::uint8_t i = 0; i < ba_count; ++i) {
+                        ZEPHYR_TRY_ASSIGN(ba_src, register_index(static_cast<std::uint8_t>(instruction.src1 + i), span));
+                        ba_array->elements[i] = regs_ptr[ba_src];
+                        note_array_element_write(ba_array, i, ba_array->elements[i]);
+                    }
+                    regs_ptr[ba_dst] = Value::object(ba_array);
+                    ++local_ip; break;
+                }
+                case BytecodeOp::R_LOAD_INDEX: {
+                    ZEPHYR_TRY_ASSIGN(li_dst, register_index(instruction.dst, span));
+                    ZEPHYR_TRY_ASSIGN(li_src, register_index(instruction.src1, span));
+                    ZEPHYR_TRY_ASSIGN(li_idx, register_index(instruction.src2, span));
+                    ZEPHYR_TRY_ASSIGN(li_result, get_index_value(regs_ptr[li_src], regs_ptr[li_idx], span, module.name));
+                    regs_ptr[li_dst] = li_result;
+                    ++local_ip; break;
+                }
                 case BytecodeOp::R_JUMP:
                     local_ip = static_cast<std::size_t>(instruction.operand);
                     break;
@@ -5674,6 +6541,22 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     }
                     break;
                 }
+                case BytecodeOp::R_SI_CMPI_JUMP_FALSE: {
+                    if (metadata.jump_table.empty()) {
+                        return make_loc_error<CoroutineExecutionResult>(module.name, span, "R_SI_CMPI_JUMP_FALSE missing jump metadata.");
+                    }
+                    ZEPHYR_TRY_ASSIGN(cmpi_src_idx, register_index(unpack_r_si_cmpi_jump_false_src1(instruction.operand), span));
+                    const Value& cmpi_lhs = regs_ptr[cmpi_src_idx];
+                    const std::int64_t cmpi_imm = unpack_r_si_cmpi_jump_false_imm(instruction.operand);
+                    const Value cmpi_rhs_val = Value::integer(cmpi_imm);
+                    const BytecodeOp cmpi_op = register_bytecode_op_from_superinstruction_compare_kind(
+                        unpack_r_si_cmpi_jump_false_kind(instruction.operand));
+                    ZEPHYR_TRY_ASSIGN(cmpi_result, binary_fast_or_fallback(cmpi_op, cmpi_lhs, cmpi_rhs_val, span));
+                    if (!is_truthy(cmpi_result)) {
+                        local_ip = static_cast<std::size_t>(metadata.jump_table.front());
+                    } else { ++local_ip; }
+                    break;
+                }
                 case BytecodeOp::R_SI_LOAD_ADD_STORE: {
                     ZEPHYR_TRY_ASSIGN(dst, register_index(unpack_r_si_load_add_store_dst(instruction.operand), span));
                     ZEPHYR_TRY_ASSIGN(local_src, register_index(unpack_r_si_load_add_store_local_src(instruction.operand), span));
@@ -5683,6 +6566,25 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     regs_ptr[dst] = result;
                     ++local_ip;
                     break;
+                }
+                case BytecodeOp::R_SI_MODI_ADD_STORE: {
+                    ZEPHYR_TRY_ASSIGN(sma_dst, register_index(instruction.dst, span));
+                    ZEPHYR_TRY_ASSIGN(sma_acc_idx, register_index(instruction.src1, span));
+                    ZEPHYR_TRY_ASSIGN(sma_src_idx, register_index(instruction.src2, span));
+                    const Value& sma_acc = regs_ptr[sma_acc_idx];
+                    const Value& sma_src = regs_ptr[sma_src_idx];
+                    const std::int64_t sma_div = static_cast<std::int64_t>(instruction.operand_a);
+                    if (sma_acc.is_int() && sma_src.is_int()) {
+                        const std::int64_t sma_r = sma_acc.as_int() + (sma_src.as_int() % sma_div);
+                        if (sma_r >= Value::kIntMin && sma_r <= Value::kIntMax) {
+                            regs_ptr[sma_dst] = Value::integer(sma_r); ++local_ip; break;
+                        }
+                    }
+                    { const Value sma_div_val = Value::integer(sma_div);
+                    ZEPHYR_TRY_ASSIGN(sma_mod, binary_fast_or_fallback(BytecodeOp::R_MOD, sma_src, sma_div_val, span));
+                    ZEPHYR_TRY_ASSIGN(sma_result, binary_fast_or_fallback(BytecodeOp::R_ADD, sma_acc, sma_mod, span));
+                    regs_ptr[sma_dst] = sma_result; }
+                    ++local_ip; break;
                 }
                 case BytecodeOp::R_YIELD: {
                     ZEPHYR_TRY_ASSIGN(src, register_index(instruction.src1, span));
@@ -11963,10 +12865,21 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_DIV:
             case BytecodeOp::R_MOD:
             case BytecodeOp::R_LOAD_CONST:
+            case BytecodeOp::R_LOAD_INT:
+            case BytecodeOp::R_ADDI:
+            case BytecodeOp::R_MODI:
+            case BytecodeOp::R_ADDI_JUMP:
+            case BytecodeOp::R_SI_CMPI_JUMP_FALSE:
             case BytecodeOp::R_LOAD_GLOBAL:
             case BytecodeOp::R_STORE_GLOBAL:
             case BytecodeOp::R_MOVE:
             case BytecodeOp::R_CALL:
+            case BytecodeOp::R_LOAD_MEMBER:
+            case BytecodeOp::R_STORE_MEMBER:
+            case BytecodeOp::R_CALL_MEMBER:
+            case BytecodeOp::R_BUILD_STRUCT:
+            case BytecodeOp::R_BUILD_ARRAY:
+            case BytecodeOp::R_LOAD_INDEX:
             case BytecodeOp::R_RETURN:
             case BytecodeOp::R_JUMP:
             case BytecodeOp::R_JUMP_IF_FALSE:
@@ -11985,6 +12898,9 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_SI_MUL_STORE:
             case BytecodeOp::R_SI_CMP_JUMP_FALSE:
             case BytecodeOp::R_SI_LOAD_ADD_STORE:
+            case BytecodeOp::R_SI_MODI_ADD_STORE:
+            case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
+            case BytecodeOp::R_SI_LOOP_STEP:
                 return true;
             default:
                 return false;
@@ -12041,6 +12957,31 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                         out << " dst=r" << static_cast<int>(unpack_r_dst_operand(instruction.operand))
                             << " const_idx=" << unpack_r_index_operand(instruction.operand);
                         break;
+                    case BytecodeOp::R_LOAD_INT:
+                        out << " dst=r" << static_cast<int>(unpack_r_load_int_dst(instruction.operand))
+                            << " value=" << unpack_r_load_int_value(instruction.operand);
+                        break;
+                    case BytecodeOp::R_ADDI:
+                        out << " dst=r" << static_cast<int>(unpack_r_addi_dst(instruction.operand))
+                            << " src=r" << static_cast<int>(unpack_r_addi_src(instruction.operand))
+                            << " imm=" << unpack_r_addi_imm(instruction.operand);
+                        break;
+                    case BytecodeOp::R_MODI:
+                        out << " dst=r" << static_cast<int>(unpack_r_modi_dst(instruction.operand))
+                            << " src=r" << static_cast<int>(unpack_r_modi_src(instruction.operand))
+                            << " imm=" << unpack_r_modi_imm(instruction.operand);
+                        break;
+                    case BytecodeOp::R_ADDI_JUMP:
+                        out << " dst=r" << static_cast<int>(unpack_r_addi_dst(instruction.operand))
+                            << " src=r" << static_cast<int>(unpack_r_addi_src(instruction.operand))
+                            << " imm=" << unpack_r_addi_imm(instruction.operand)
+                            << " target=" << instruction.ic_slot;
+                        break;
+                    case BytecodeOp::R_SI_CMPI_JUMP_FALSE:
+                        out << " src=r" << static_cast<int>(unpack_r_si_cmpi_jump_false_src1(instruction.operand))
+                            << " imm=" << unpack_r_si_cmpi_jump_false_imm(instruction.operand)
+                            << " kind=" << bytecode_op_name(register_bytecode_op_from_superinstruction_compare_kind(unpack_r_si_cmpi_jump_false_kind(instruction.operand)));
+                        break;
                     case BytecodeOp::R_LOAD_GLOBAL:
                         out << " dst=r" << static_cast<int>(unpack_r_dst_operand(instruction.operand))
                             << " global_idx=" << unpack_r_index_operand(instruction.operand);
@@ -12060,6 +13001,40 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                     case BytecodeOp::R_CALL:
                         out << " dst=r" << static_cast<int>(instruction.dst) << " callee=r" << static_cast<int>(instruction.src1)
                             << " args_start=r" << static_cast<int>(instruction.src2) << " argc=" << static_cast<int>(instruction.operand_a);
+                        break;
+                    case BytecodeOp::R_LOAD_MEMBER:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " obj=r" << static_cast<int>(instruction.src1)
+                            << " member=" << metadata.string_operand;
+                        break;
+                    case BytecodeOp::R_STORE_MEMBER:
+                        out << " obj=r" << static_cast<int>(instruction.src1)
+                            << " val=r" << static_cast<int>(instruction.src2)
+                            << " member=" << metadata.string_operand;
+                        break;
+                    case BytecodeOp::R_CALL_MEMBER:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " obj=r" << static_cast<int>(instruction.src1)
+                            << " args_start=r" << static_cast<int>(instruction.src2)
+                            << " argc=" << static_cast<int>(instruction.operand_a)
+                            << " member=" << metadata.string_operand;
+                        break;
+                    case BytecodeOp::R_BUILD_STRUCT:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " base=r" << static_cast<int>(instruction.src1)
+                            << " count=" << static_cast<int>(instruction.operand_a)
+                            << " type=" << metadata.string_operand;
+                        for (const auto& name : metadata.names) out << " field=" << name;
+                        break;
+                    case BytecodeOp::R_BUILD_ARRAY:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " base=r" << static_cast<int>(instruction.src1)
+                            << " count=" << static_cast<int>(instruction.operand_a);
+                        break;
+                    case BytecodeOp::R_LOAD_INDEX:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " obj=r" << static_cast<int>(instruction.src1)
+                            << " idx=r" << static_cast<int>(instruction.src2);
                         break;
                     case BytecodeOp::R_RETURN:
                         out << " src=r" << static_cast<int>(instruction.src1);
@@ -12101,6 +13076,26 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                         out << " dst=r" << static_cast<int>(unpack_r_si_load_add_store_dst(instruction.operand))
                             << " src=r" << static_cast<int>(unpack_r_si_load_add_store_local_src(instruction.operand))
                             << " const_idx=" << unpack_r_si_load_add_store_constant(instruction.operand);
+                        break;
+                    case BytecodeOp::R_SI_MODI_ADD_STORE:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " accum=r" << static_cast<int>(instruction.src1)
+                            << " src=r" << static_cast<int>(instruction.src2)
+                            << " div=" << static_cast<int>(instruction.operand_a);
+                        break;
+                    case BytecodeOp::R_SI_ADDI_CMPI_LT_JUMP:
+                        out << " reg=r" << static_cast<int>(unpack_r_si_acj_reg(instruction.operand))
+                            << " addi=" << unpack_r_si_acj_addi(instruction.operand)
+                            << " limit=" << unpack_r_si_acj_limit(instruction.operand)
+                            << " body=" << instruction.ic_slot;
+                        break;
+                    case BytecodeOp::R_SI_LOOP_STEP:
+                        out << " accum=r" << static_cast<int>(instruction.dst)
+                            << " iter=r" << static_cast<int>(instruction.src2)
+                            << " div=" << static_cast<int>(instruction.operand_a)
+                            << " step=" << static_cast<int>(static_cast<std::int8_t>(instruction.src1))
+                            << " limit=" << unpack_r_si_ls_limit(instruction.ic_slot)
+                            << " body=" << unpack_r_si_ls_body(instruction.ic_slot);
                         break;
                     default:
                         break;
@@ -13218,44 +14213,79 @@ std::string ZephyrValue::describe() const { return to_string(*this); }
 
 ZephyrHostClass::ZephyrHostClass(std::string name) : name_(std::move(name)) {}
 const std::string& ZephyrHostClass::name() const { return name_; }
-void ZephyrHostClass::add_method(std::string name, Method method) { methods_[std::move(name)] = std::move(method); }
-void ZephyrHostClass::add_property(std::string name, Getter getter, Setter setter) {
-    properties_[std::move(name)] = Property{std::move(getter), std::move(setter)};
+void ZephyrHostClass::add_method(std::string name, Method method) {
+    const auto it = methods_index_.find(name);
+    if (it != methods_index_.end()) {
+        methods_list_[it->second].fn = std::move(method);
+        return;
+    }
+    methods_index_[name] = static_cast<std::uint32_t>(methods_list_.size());
+    methods_list_.push_back({std::move(name), std::move(method)});
 }
-bool ZephyrHostClass::has_method(const std::string& name) const { return methods_.contains(name); }
-bool ZephyrHostClass::has_property(const std::string& name) const { return properties_.contains(name); }
+void ZephyrHostClass::add_property(std::string name, Getter getter, Setter setter) {
+    const auto it = properties_index_.find(name);
+    if (it != properties_index_.end()) {
+        properties_list_[it->second].getter = std::move(getter);
+        properties_list_[it->second].setter = std::move(setter);
+        return;
+    }
+    properties_index_[name] = static_cast<std::uint32_t>(properties_list_.size());
+    properties_list_.push_back({std::move(name), std::move(getter), std::move(setter)});
+}
+bool ZephyrHostClass::has_method(const std::string& name) const { return methods_index_.contains(name); }
+bool ZephyrHostClass::has_property(const std::string& name) const { return properties_index_.contains(name); }
 const ZephyrHostClass::Method* ZephyrHostClass::find_method(const std::string& name) const {
-    const auto it = methods_.find(name);
-    return it == methods_.end() ? nullptr : &it->second;
+    const auto it = methods_index_.find(name);
+    return it == methods_index_.end() ? nullptr : &methods_list_[it->second].fn;
 }
 const ZephyrHostClass::Getter* ZephyrHostClass::find_getter(const std::string& name) const {
-    const auto it = properties_.find(name);
-    return it == properties_.end() || !it->second.getter ? nullptr : &it->second.getter;
+    const auto it = properties_index_.find(name);
+    if (it == properties_index_.end() || !properties_list_[it->second].getter) return nullptr;
+    return &properties_list_[it->second].getter;
 }
 const ZephyrHostClass::Setter* ZephyrHostClass::find_setter(const std::string& name) const {
-    const auto it = properties_.find(name);
-    return it == properties_.end() || !it->second.setter ? nullptr : &it->second.setter;
+    const auto it = properties_index_.find(name);
+    if (it == properties_index_.end() || !properties_list_[it->second].setter) return nullptr;
+    return &properties_list_[it->second].setter;
+}
+const ZephyrHostClass::Method* ZephyrHostClass::find_method_ic(const std::string& name, std::uint32_t& out_index) const {
+    const auto it = methods_index_.find(name);
+    if (it == methods_index_.end()) return nullptr;
+    out_index = it->second;
+    return &methods_list_[it->second].fn;
+}
+const ZephyrHostClass::Getter* ZephyrHostClass::find_getter_ic(const std::string& name, std::uint32_t& out_index) const {
+    const auto it = properties_index_.find(name);
+    if (it == properties_index_.end() || !properties_list_[it->second].getter) return nullptr;
+    out_index = it->second;
+    return &properties_list_[it->second].getter;
+}
+const ZephyrHostClass::Method* ZephyrHostClass::get_method_at(std::uint32_t index) const {
+    if (index >= methods_list_.size()) return nullptr;
+    return &methods_list_[index].fn;
+}
+const ZephyrHostClass::Getter* ZephyrHostClass::get_getter_at(std::uint32_t index) const {
+    if (index >= properties_list_.size() || !properties_list_[index].getter) return nullptr;
+    return &properties_list_[index].getter;
 }
 ZephyrValue ZephyrHostClass::invoke(void* instance, const std::string& method_name, const std::vector<ZephyrValue>& args) const {
-    const auto* method = find_method(method_name);
-    if (method == nullptr) {
-        fail("Unknown host method: " + method_name);
-    }
-    return (*method)(instance, args);
+    const auto it = methods_index_.find(method_name);
+    if (it == methods_index_.end()) fail("Unknown host method: " + method_name);
+    return methods_list_[it->second].fn(instance, args);
 }
 ZephyrValue ZephyrHostClass::get(void* instance, const std::string& property_name) const {
-    const auto it = properties_.find(property_name);
-    if (it == properties_.end() || !it->second.getter) {
+    const auto it = properties_index_.find(property_name);
+    if (it == properties_index_.end() || !properties_list_[it->second].getter) {
         fail("Unknown host property getter: " + property_name);
     }
-    return it->second.getter(instance);
+    return properties_list_[it->second].getter(instance);
 }
 void ZephyrHostClass::set(void* instance, const std::string& property_name, const ZephyrValue& value) const {
-    const auto it = properties_.find(property_name);
-    if (it == properties_.end() || !it->second.setter) {
+    const auto it = properties_index_.find(property_name);
+    if (it == properties_index_.end() || !properties_list_[it->second].setter) {
         fail("Unknown host property setter: " + property_name);
     }
-    it->second.setter(instance, value);
+    properties_list_[it->second].setter(instance, value);
 }
 
 bool ZephyrFunctionHandle::valid() const { return !module_name.empty() && !function_name.empty(); }
