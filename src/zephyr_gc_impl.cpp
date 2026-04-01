@@ -2362,19 +2362,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     Value* __restrict spill_ptr = spill_count > 0 ? regs_data + reg_count : nullptr;
 
     // ── Iterative call frame stack (Lua-style SP movement) ──────────────
-    struct RegCallFrame {
-        std::size_t ip;
-        std::size_t reg_base;
-        std::size_t reg_count;
-        std::size_t dst;
-        const BytecodeFunction* chunk;  // null = same function (skip pointer restore)
-        Environment* call_env;
-        const std::string* module_name;
-        Environment* module_env;
-        const std::vector<UpvalueCellObject*>* upvalues;
-        CoroutineObject* coroutine;     // non-null = coroutine frame (for R_YIELD restore)
-    };
-    std::vector<RegCallFrame> iterative_call_stack_;
+    // Phase B: use unified FrameHeader from zephyr_internal.hpp
+    std::vector<FrameHeader> iterative_call_stack_;
     iterative_call_stack_.reserve(64);
 
     // Mutable frame state — changes on push/pop
@@ -2637,6 +2626,163 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
 
         int c_result = zephyr_vm_dispatch(&dstate, &cbs);
 
+        // Phase B: coroutine re-entry loop — handle resume/yield frame swaps
+        // in C++ and re-enter C dispatch, avoiding fallthrough to the slow C++ loop.
+        while (c_result == ZVM_COROUTINE_RESUME || c_result == ZVM_COROUTINE_YIELD) {
+            register_sp_ = dstate.register_sp;
+            ip = dstate.ip;
+            regs_ptr = reinterpret_cast<Value*>(dstate.regs);
+
+            if (c_result == ZVM_COROUTINE_RESUME) {
+                // dstate.coroutine_value holds the coroutine object (as Value bits)
+                Value co_val;
+                std::memcpy(&co_val, &dstate.coroutine_value, sizeof(Value));
+                if (!co_val.is_object() || co_val.as_object()->kind != ObjectKind::Coroutine) {
+                    // Not a coroutine — fall through to C++ slow path
+                    break;
+                }
+                auto* co = static_cast<CoroutineObject*>(co_val.as_object());
+                if (co->completed) {
+                    // Completed coroutine: write nil to dst, advance ip, re-enter C dispatch
+                    const CompactInstruction& ri = instructions_ptr[ip];
+                    regs_ptr[ri.dst] = Value::nil();
+                    dstate.ip = ip + 1;
+                    dstate.regs = reinterpret_cast<ZephyrVal*>(regs_ptr);
+                    c_result = zephyr_vm_dispatch(&dstate, &cbs);
+                    continue;
+                }
+                // Fiber-style fast path: started, single-frame, register-mode
+                if (co->started && co->frames.size() == 1 && co->frames[0].uses_register_mode) {
+                    const CompactInstruction& ri = instructions_ptr[ip];
+                    // Push caller frame
+                    iterative_call_stack_.push_back({
+                        ip + 1, active_reg_base, active_reg_count,
+                        static_cast<std::size_t>(ri.dst),
+                        active_chunk, active_call_env, active_module_name, active_module_env,
+                        active_upvalues, active_coroutine_
+                    });
+
+                    // Swap to coroutine state
+                    auto& cf = co->frames.front();
+                    active_chunk = cf.bytecode.get();
+                    active_upvalues = &cf.captured_upvalues;
+                    active_coroutine_ = co;
+
+                    Value* co_regs = (cf.reg_count > 0 && cf.regs.empty())
+                        ? cf.inline_regs : cf.regs.data();
+                    regs_ptr = co_regs;
+                    ip = cf.ip_index;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
+
+                    co->suspended = false;
+                    ++co->resume_count;
+
+                    // Rebuild upvalue view for C dispatch
+                    c_upvalue_cells.clear();
+                    if (active_upvalues && !active_upvalues->empty()) {
+                        c_upvalue_cells.resize(active_upvalues->size());
+                        for (std::size_t ui = 0; ui < active_upvalues->size(); ++ui) {
+                            c_upvalue_cells[ui] = reinterpret_cast<ZephyrVal*>(
+                                &(*active_upvalues)[ui]->value);
+                        }
+                    }
+
+                    // Update dstate for re-entry
+                    dstate.regs = reinterpret_cast<ZephyrVal*>(regs_ptr);
+                    dstate.ip = ip;
+                    dstate.instructions = reinterpret_cast<const ZInstruction*>(instructions_ptr);
+                    dstate.instructions_size = instructions_size;
+                    dstate.active_chunk = active_chunk;
+                    dstate.active_reg_count = active_chunk->max_regs > active_chunk->local_count
+                        ? static_cast<std::size_t>(active_chunk->max_regs)
+                        : static_cast<std::size_t>(active_chunk->local_count);
+                    dstate.int_constants = nullptr;  // coroutine frame uses its own constants
+                    dstate.int_constant_valid = nullptr;
+                    dstate.constants_count = active_chunk->constants.size();
+                    dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
+                    dstate.upvalue_count = c_upvalue_cells.size();
+                    dstate.globals.bindings = reinterpret_cast<void**>(
+                        active_chunk->resolved_global_bindings.data());
+                    dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
+                    dstate.globals.count = active_chunk->global_names.size();
+                    dstate.deopt_reason = ZDEOPT_NONE;
+
+                    c_result = zephyr_vm_dispatch(&dstate, &cbs);
+                    continue;
+                }
+                // Slow path: first resume, multi-frame, or non-register-mode — fall through
+                break;
+            }
+
+            if (c_result == ZVM_COROUTINE_YIELD) {
+                if (active_coroutine_ != nullptr && !iterative_call_stack_.empty()) {
+                    // Fiber-style yield: save IP, pop caller frame
+                    const CompactInstruction& yi = instructions_ptr[ip];
+                    active_coroutine_->frames.front().ip_index = ip + 1;
+                    active_coroutine_->suspended = true;
+                    ++active_coroutine_->yield_count;
+                    const Value yv = regs_ptr[yi.src1];
+
+                    auto& parent = iterative_call_stack_.back();
+                    ip = parent.ip;
+                    active_reg_base = parent.reg_base;
+                    active_reg_count = parent.reg_count;
+                    active_call_env = parent.call_env;
+                    active_module_name = parent.module_name;
+                    active_module_env = parent.module_env;
+                    active_upvalues = parent.upvalues;
+                    active_coroutine_ = parent.coroutine;
+                    active_chunk = parent.chunk;
+                    instructions_ptr = active_chunk->instructions.data();
+                    metadata_ptr = active_chunk->metadata.data();
+                    constants_ptr = active_chunk->constants.data();
+                    instructions_size = active_chunk->instructions.size();
+                    regs_ptr = register_pool_.data() + active_reg_base;
+                    regs_ptr[parent.dst] = yv;
+                    iterative_call_stack_.pop_back();
+
+                    // Rebuild upvalue view for caller
+                    c_upvalue_cells.clear();
+                    if (active_upvalues && !active_upvalues->empty()) {
+                        c_upvalue_cells.resize(active_upvalues->size());
+                        for (std::size_t ui = 0; ui < active_upvalues->size(); ++ui) {
+                            c_upvalue_cells[ui] = reinterpret_cast<ZephyrVal*>(
+                                &(*active_upvalues)[ui]->value);
+                        }
+                    }
+
+                    // Update dstate for re-entry into caller
+                    dstate.regs = reinterpret_cast<ZephyrVal*>(regs_ptr);
+                    dstate.reg_pool = reinterpret_cast<ZephyrVal*>(register_pool_.data());
+                    dstate.reg_pool_capacity = register_pool_.size();
+                    dstate.register_sp = register_sp_;
+                    dstate.ip = ip;
+                    dstate.instructions = reinterpret_cast<const ZInstruction*>(instructions_ptr);
+                    dstate.instructions_size = instructions_size;
+                    dstate.active_chunk = active_chunk;
+                    dstate.active_reg_count = active_reg_count;
+                    dstate.int_constants = nullptr;
+                    dstate.int_constant_valid = nullptr;
+                    dstate.constants_count = active_chunk->constants.size();
+                    dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
+                    dstate.upvalue_count = c_upvalue_cells.size();
+                    dstate.globals.bindings = reinterpret_cast<void**>(
+                        active_chunk->resolved_global_bindings.data());
+                    dstate.globals.resolved = active_chunk->globals_resolved ? 1 : 0;
+                    dstate.globals.count = active_chunk->global_names.size();
+                    dstate.deopt_reason = ZDEOPT_NONE;
+
+                    c_result = zephyr_vm_dispatch(&dstate, &cbs);
+                    continue;
+                }
+                // No active coroutine or empty call stack — fall through to C++ error handling
+                break;
+            }
+        }
+
         // Sync state back
         register_sp_ = dstate.register_sp;
 
@@ -2647,8 +2793,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             return ret_val;
         }
 
-        // ZVM_SLOW_OPCODE, ZVM_COROUTINE_RESUME, ZVM_COROUTINE_YIELD, or ZVM_ERROR:
-        // fall through to C++ loop which handles these opcodes natively
+        // ZVM_SLOW_OPCODE or ZVM_ERROR: fall through to C++ loop
         ip = dstate.ip;
         regs_ptr = reinterpret_cast<Value*>(dstate.regs);
         // Continue with existing C++ dispatch loop below

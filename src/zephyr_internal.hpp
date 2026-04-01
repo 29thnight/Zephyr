@@ -475,4 +475,21 @@ inline const char* object_kind_name(ObjectKind kind) {
 
 #include "zephyr_compiler.hpp"
 
+// ── Phase B: Unified FrameHeader for CallFrame and CoroutineFrame ────────────
+// Shared layout used by the iterative call stack in execute_register_bytecode.
+// Both regular function calls and coroutine resume/yield use this same struct
+// for frame push/pop, enabling pointer-swap style frame transitions.
+struct FrameHeader {
+    std::size_t ip;
+    std::size_t reg_base;
+    std::size_t reg_count;
+    std::size_t dst;
+    const BytecodeFunction* chunk;  // null = same function (skip pointer restore)
+    Environment* call_env;
+    const std::string* module_name;
+    Environment* module_env;
+    const std::vector<UpvalueCellObject*>* upvalues;
+    CoroutineObject* coroutine;     // non-null = coroutine frame (for R_YIELD restore)
+};
+
 }  // namespace zephyr
