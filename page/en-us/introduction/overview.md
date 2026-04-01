@@ -1,13 +1,14 @@
 # Overview
 
-Zephyr is a high-performance embedded scripting language for game engines, heavily inspired by Rust's syntax design.
+Zephyr is a high-performance embedded scripting language for game engines that adopts Rust-style syntax while eliminating the complexity of borrow checking and lifetime annotations.
 
 ## Core Features
 - **Supported Paradigms**: Functions, Structs, Enums, Traits/Impls, Pattern Matching (`match`), Generics, Coroutines, Module Import/Export.
 - **Control Flow**: Supports `if let`, `while let`, and range-based iterators (`0..n`, `0..=n`).
-- **Runtime Architecture**: Register-based VM with superinstruction fusion.
-- **Garbage Collection**: 4-Space generational collector with card tracking and write barriers.
-- **Coroutines**: Independent heap-reserved memory frames (`CoroutineObject`), decoupled from the C++ native call stack.
+- **Runtime Architecture**: Register-based bytecode VM with superinstruction fusion. In Release builds, the AST is skipped entirely — only bytecode is used for execution.
+- **Garbage Collection**: Generational GC with card tracking and write barriers.
+- **Coroutines**: Independent heap-reserved memory frames (`CoroutineObject`), fully decoupled from the C++ native call stack.
+- **Safe Host Integration**: Explicit C++ runtime host bindings with a 4-tier handle lifecycle system (`Frame`, `Tick`, `Persistent`, `Stable`).
 
 ## Constraints
 - No macro system.
