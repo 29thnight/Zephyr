@@ -11839,31 +11839,41 @@ RuntimeResult<std::vector<UpvalueCellObject*>> Runtime::capture_upvalue_cells(En
                                                                               const std::string& module_name) {
     std::vector<UpvalueCellObject*> captured;
     captured.reserve(upvalue_names.size());
-    const std::string capture_context =
-        container == HandleContainerKind::CoroutineFrame ? "coroutine capture" : "closure capture";
+    const bool need_handle_validation = !host_handles_.empty();
     for (const auto& name : upvalue_names) {
         bool found = false;
-        for (Environment* current = environment; current != nullptr; current = current->parent) {
-            auto it = current->values.find(name);
-            if (it == current->values.end()) {
-                continue;
+        // Fast path: check immediate environment first (most common case for closures)
+        if (environment != nullptr && environment->kind != EnvironmentKind::Root && environment->kind != EnvironmentKind::Module) {
+            auto it = environment->values.find(name);
+            if (it != environment->values.end()) {
+                if (need_handle_validation) {
+                    static const std::string capture_ctx = "closure capture";
+                    ZEPHYR_TRY(validate_handle_store(read_binding_value(it->second), container, span, module_name, capture_ctx));
+                }
+                captured.push_back(ensure_binding_cell(environment, name, it->second, container));
+                found = true;
             }
-            const Value value = read_binding_value(it->second);
-            ZEPHYR_TRY(validate_handle_store(value, container, span, module_name, capture_context));
-            if (current->kind == EnvironmentKind::Root || current->kind == EnvironmentKind::Module) {
-                return make_loc_error<std::vector<UpvalueCellObject*>>(
-                    module_name,
-                    span,
-                    "Internal compiler/runtime mismatch for captured upvalue '" + name + "'.");
-            }
-            captured.push_back(ensure_binding_cell(current, name, it->second, container));
-            found = true;
-            break;
         }
         if (!found) {
-            return make_loc_error<std::vector<UpvalueCellObject*>>(
-                module_name,
-                span,
+            // Slow path: walk environment chain
+            for (Environment* current = environment ? environment->parent : nullptr; current != nullptr; current = current->parent) {
+                auto it = current->values.find(name);
+                if (it == current->values.end()) continue;
+                if (current->kind == EnvironmentKind::Root || current->kind == EnvironmentKind::Module) {
+                    return make_loc_error<std::vector<UpvalueCellObject*>>(module_name, span,
+                        "Internal compiler/runtime mismatch for captured upvalue '" + name + "'.");
+                }
+                if (need_handle_validation) {
+                    static const std::string capture_ctx = "closure capture";
+                    ZEPHYR_TRY(validate_handle_store(read_binding_value(it->second), container, span, module_name, capture_ctx));
+                }
+                captured.push_back(ensure_binding_cell(current, name, it->second, container));
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return make_loc_error<std::vector<UpvalueCellObject*>>(module_name, span,
                 "Failed to resolve captured upvalue '" + name + "'.");
         }
     }
@@ -11948,7 +11958,11 @@ RuntimeResult<ScriptFunctionObject*> Runtime::create_script_function(const std::
                                                                      const Span& span,
                                                                      const std::vector<std::string>& generic_params,
                                                                      const std::vector<TraitBound>& where_clauses) {
-    ZEPHYR_TRY(validate_closure_capture(closure, span, module_name.empty() ? name : module_name));
+    // Skip closure validation when no host handles are registered (common case).
+    // validate_closure_capture walks the entire environment chain — expensive for hot closures.
+    if (!host_handles_.empty()) {
+        ZEPHYR_TRY(validate_closure_capture(closure, span, module_name.empty() ? name : module_name));
+    }
     ZEPHYR_TRY(ensure_ast_fallback_bytecode_supported(bytecode.get(), span, module_name.empty() ? name : module_name, "Script function"));
     auto* function =
         allocate<ScriptFunctionObject>(name, module_name, params, return_type, body, select_closure_environment(closure, bytecode), span, bytecode, generic_params, where_clauses);
