@@ -1,0 +1,21 @@
+// Simulates host API call pattern: deep function call chain (10 levels deep x 10K calls)
+
+func level10(x) { return x + 1; }
+func level9(x) { return level10(x); }
+func level8(x) { return level9(x); }
+func level7(x) { return level8(x); }
+func level6(x) { return level7(x); }
+func level5(x) { return level6(x); }
+func level4(x) { return level5(x); }
+func level3(x) { return level4(x); }
+func level2(x) { return level3(x); }
+func level1(x) { return level2(x); }
+
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 10000) {
+        total = level1(total);
+        i = i + 1;
+    }
+}
