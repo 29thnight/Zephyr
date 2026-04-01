@@ -120,8 +120,18 @@ typedef struct {
     const void* active_chunk; /* BytecodeFunction* */
     size_t active_reg_count;
 
+    /* Upvalue view: array of pointers to UpvalueCellObject::value fields */
+    ZephyrVal** upvalue_cells;
+    size_t upvalue_count;
+
+    /* Coroutine fast-path state */
+    ZephyrVal coroutine_value; /* resume arg or yield value */
+
     /* Return value */
     ZephyrVal return_value;
+
+    /* Deopt reason tracking */
+    int deopt_reason;
 
     /* Error state */
     int error;
@@ -133,6 +143,24 @@ typedef struct {
 #define ZVM_RETURN      1
 #define ZVM_ERROR       2
 #define ZVM_SLOW_OPCODE 3  /* fallback to C++ for this opcode */
+#define ZVM_COROUTINE_RESUME 4  /* R_RESUME: C++ handles frame swap */
+#define ZVM_COROUTINE_YIELD  5  /* R_YIELD: C++ handles frame restore */
+
+/* ── Deopt reason codes ─────────────────────────────────────────────── */
+enum {
+    ZDEOPT_NONE = 0,
+    ZDEOPT_NON_INT_ARITH,       /* non-integer operand in arithmetic */
+    ZDEOPT_OVERFLOW,             /* integer overflow */
+    ZDEOPT_NON_INT_CONST,        /* non-integer constant load */
+    ZDEOPT_GLOBAL_UNRESOLVED,    /* global not in flat cache */
+    ZDEOPT_UPVALUE_BOUNDS,       /* upvalue slot out of range */
+    ZDEOPT_COLD_OPCODE,          /* opcode not in C dispatch table */
+    ZDEOPT_CALL_DISPATCH,        /* non-same-function call */
+    ZDEOPT_FRAME_RESTORE,        /* cross-function return */
+    ZDEOPT_CMP_JUMP_FALSE,       /* comparison false branch needs metadata */
+    ZDEOPT_COROUTINE_RESUME,     /* R_RESUME needs C++ frame swap */
+    ZDEOPT_COROUTINE_YIELD,      /* R_YIELD needs C++ frame restore */
+};
 
 /* ── Callback for slow opcodes ───────────────────────────────────────── */
 typedef int (*ZSlowOpcodeHandler)(ZDispatchState* state, void* runtime, size_t opcode_ip);

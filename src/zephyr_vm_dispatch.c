@@ -48,6 +48,7 @@ int zephyr_vm_dispatch(ZDispatchState* s, const ZCallbacks* cb) {
     ZephyrVal* regs = s->regs;
     const ZInstruction* insns = s->instructions;
     size_t ip = s->ip;
+    s->deopt_reason = ZDEOPT_NONE;
 
 #define DISPATCH() do { \
     const void* _target = dispatch_table[insns[ip].op]; \
@@ -74,6 +75,10 @@ int zephyr_vm_dispatch(ZDispatchState* s, const ZCallbacks* cb) {
         [ZOP_R_NOT]                   = &&op_R_NOT,
         [ZOP_R_SI_CMP_JUMP_FALSE]     = &&op_R_SI_CMP_JUMP_FALSE,
         [ZOP_R_SI_ADDI_CMPI_LT_JUMP] = &&op_R_SI_ADDI_CMPI_LT_JUMP,
+        [ZOP_R_LOAD_UPVALUE]          = &&op_R_LOAD_UPVALUE,
+        [ZOP_R_STORE_UPVALUE]         = &&op_R_STORE_UPVALUE,
+        [ZOP_R_RESUME]                = &&op_R_RESUME,
+        [ZOP_R_YIELD]                 = &&op_R_YIELD,
         /* All other opcodes: NULL entries fall through to slow_path */
     };
 
@@ -288,10 +293,57 @@ op_R_SI_ADDI_CMPI_LT_JUMP: {
     goto slow_path;
 }
 
+op_R_LOAD_UPVALUE: {
+    const ZInstruction* i = &insns[ip];
+    uint8_t dst = unpack_dst(i->operand);
+    int slot = unpack_idx(i->operand);
+    if (s->upvalue_cells && slot >= 0 && (size_t)slot < s->upvalue_count
+        && s->upvalue_cells[slot]) {
+        regs[dst] = *s->upvalue_cells[slot];
+        NEXT();
+    }
+    s->deopt_reason = ZDEOPT_UPVALUE_BOUNDS;
+    goto slow_path;
+}
+
+op_R_STORE_UPVALUE: {
+    const ZInstruction* i = &insns[ip];
+    uint8_t src = unpack_dst(i->operand); /* src reg is in dst position */
+    int slot = unpack_idx(i->operand);
+    if (s->upvalue_cells && slot >= 0 && (size_t)slot < s->upvalue_count
+        && s->upvalue_cells[slot]) {
+        *s->upvalue_cells[slot] = regs[src];
+        NEXT();
+    }
+    s->deopt_reason = ZDEOPT_UPVALUE_BOUNDS;
+    goto slow_path;
+}
+
+op_R_RESUME: {
+    /* Save state and return to C++ for coroutine frame swap */
+    const ZInstruction* i = &insns[ip];
+    s->ip = ip;
+    s->regs = regs;
+    s->coroutine_value = regs[i->src1]; /* coroutine object */
+    s->deopt_reason = ZDEOPT_COROUTINE_RESUME;
+    return ZVM_COROUTINE_RESUME;
+}
+
+op_R_YIELD: {
+    /* Save state and return to C++ for coroutine yield */
+    const ZInstruction* i = &insns[ip];
+    s->ip = ip;
+    s->regs = regs;
+    s->coroutine_value = regs[i->src1]; /* yield value */
+    s->deopt_reason = ZDEOPT_COROUTINE_YIELD;
+    return ZVM_COROUTINE_YIELD;
+}
+
     /* ── Slow path: fall back to C++ ──────────────────────────────── */
 slow_path:
     s->ip = ip;
     s->regs = regs;
+    if (s->deopt_reason == ZDEOPT_NONE) s->deopt_reason = ZDEOPT_COLD_OPCODE;
     {
         int rc = cb->slow_opcode(s, cb->runtime, ip);
         if (rc != ZVM_OK) return rc;

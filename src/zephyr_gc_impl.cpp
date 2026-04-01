@@ -2533,7 +2533,22 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     static_assert(static_cast<int>(BytecodeOp::R_LOAD_UPVALUE) == ZOP_R_LOAD_UPVALUE);
     static_assert(static_cast<int>(BytecodeOp::R_MAKE_FUNCTION) == ZOP_R_MAKE_FUNCTION);
     static_assert(static_cast<int>(BytecodeOp::R_RESUME) == ZOP_R_RESUME);
-    if (captured_upvalues == nullptr || captured_upvalues->empty()) {
+    static_assert(static_cast<int>(BytecodeOp::R_YIELD) == ZOP_R_YIELD);
+    static_assert(static_cast<int>(BytecodeOp::R_STORE_UPVALUE) == ZOP_R_STORE_UPVALUE);
+    {
+        // Build upvalue cell pointers for C dispatch
+        std::vector<ZephyrVal*> c_upvalue_cells;
+        if (captured_upvalues != nullptr && !captured_upvalues->empty()) {
+            c_upvalue_cells.resize(captured_upvalues->size(), nullptr);
+            for (size_t ui = 0; ui < captured_upvalues->size(); ++ui) {
+                if ((*captured_upvalues)[ui] != nullptr) {
+                    // Point directly to the Value field inside UpvalueCellObject
+                    c_upvalue_cells[ui] = reinterpret_cast<ZephyrVal*>(
+                        &(*captured_upvalues)[ui]->value);
+                }
+            }
+        }
+
         // Extract int constants
         std::vector<int64_t> c_int_constants(chunk.constants.size());
         std::vector<int> c_int_valid(chunk.constants.size(), 0);
@@ -2585,6 +2600,10 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         dstate.call_stack_capacity = 0;
         dstate.active_chunk = active_chunk;
         dstate.active_reg_count = active_reg_count;
+        dstate.upvalue_cells = c_upvalue_cells.empty() ? nullptr : c_upvalue_cells.data();
+        dstate.upvalue_count = c_upvalue_cells.size();
+        dstate.coroutine_value = 0;
+        dstate.deopt_reason = ZDEOPT_NONE;
 
         // Allocate call stack for C dispatch
         std::vector<ZCallFrame> c_call_stack(64);
@@ -2628,7 +2647,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
             return ret_val;
         }
 
-        // ZVM_SLOW_OPCODE or ZVM_ERROR: fall through to C++ loop
+        // ZVM_SLOW_OPCODE, ZVM_COROUTINE_RESUME, ZVM_COROUTINE_YIELD, or ZVM_ERROR:
+        // fall through to C++ loop which handles these opcodes natively
         ip = dstate.ip;
         regs_ptr = reinterpret_cast<Value*>(dstate.regs);
         // Continue with existing C++ dispatch loop below
