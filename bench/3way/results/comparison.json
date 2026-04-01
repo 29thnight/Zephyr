@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-01T12:05:55.128569+00:00",
+  "generated_at": "2026-04-01T12:09:46.642089+00:00",
   "iterations": 10,
   "runtimes": {
     "zephyr": "C:\\Users\\lance\\source\\Zephyr\\.claude\\worktrees\\quirky-black\\build\\zephyr.exe",
@@ -11,24 +11,24 @@
       "name": "fibonacci(35)",
       "results": {
         "zephyr": {
-          "mean_ms": 1487.13,
-          "min_ms": 1381.65,
-          "max_ms": 1639.97,
-          "p95_ms": 1639.97,
+          "mean_ms": 1308.8,
+          "min_ms": 1275.74,
+          "max_ms": 1368.59,
+          "p95_ms": 1368.59,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 960.49,
-          "min_ms": 902.61,
-          "max_ms": 1091.41,
-          "p95_ms": 1091.41,
+          "mean_ms": 953.93,
+          "min_ms": 910.85,
+          "max_ms": 1017.02,
+          "p95_ms": 1017.02,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 2478.76,
-          "min_ms": 2336.91,
-          "max_ms": 2945.78,
-          "p95_ms": 2945.78,
+          "mean_ms": 2480.51,
+          "min_ms": 2384.23,
+          "max_ms": 2791.83,
+          "p95_ms": 2791.83,
           "samples": 10
         }
       },
@@ -38,24 +38,24 @@
       "name": "hot_loop(1M)",
       "results": {
         "zephyr": {
-          "mean_ms": 37.59,
-          "min_ms": 31.82,
-          "max_ms": 42.4,
-          "p95_ms": 42.4,
+          "mean_ms": 44.67,
+          "min_ms": 38.38,
+          "max_ms": 49.62,
+          "p95_ms": 49.62,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 17.14,
-          "min_ms": 15.88,
-          "max_ms": 20.71,
-          "p95_ms": 20.71,
+          "mean_ms": 19.46,
+          "min_ms": 16.74,
+          "max_ms": 26.4,
+          "p95_ms": 26.4,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 49.23,
-          "min_ms": 45.64,
-          "max_ms": 53.12,
-          "p95_ms": 53.12,
+          "mean_ms": 56.59,
+          "min_ms": 48.08,
+          "max_ms": 68.92,
+          "p95_ms": 68.92,
           "samples": 10
         }
       },
@@ -65,24 +65,24 @@
       "name": "array_sum(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 52.33,
-          "min_ms": 47.16,
-          "max_ms": 57.25,
-          "p95_ms": 57.25,
+          "mean_ms": 53.45,
+          "min_ms": 46.33,
+          "max_ms": 74.82,
+          "p95_ms": 74.82,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 36.28,
-          "min_ms": 33.77,
-          "max_ms": 39.23,
-          "p95_ms": 39.23,
+          "mean_ms": 42.08,
+          "min_ms": 35.8,
+          "max_ms": 47.9,
+          "p95_ms": 47.9,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 92.5,
-          "min_ms": 82.17,
-          "max_ms": 106.33,
-          "p95_ms": 106.33,
+          "mean_ms": 129.31,
+          "min_ms": 86.75,
+          "max_ms": 205.44,
+          "p95_ms": 205.44,
           "samples": 10
         }
       },
@@ -92,24 +92,24 @@
       "name": "closure(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 57.49,
-          "min_ms": 54.01,
-          "max_ms": 64.73,
-          "p95_ms": 64.73,
+          "mean_ms": 62.03,
+          "min_ms": 54.55,
+          "max_ms": 79.6,
+          "p95_ms": 79.6,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 38.1,
-          "min_ms": 34.35,
-          "max_ms": 45.71,
-          "p95_ms": 45.71,
+          "mean_ms": 40.04,
+          "min_ms": 35.54,
+          "max_ms": 44.41,
+          "p95_ms": 44.41,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 82.35,
-          "min_ms": 75.53,
-          "max_ms": 90.1,
-          "p95_ms": 90.1,
+          "mean_ms": 93.88,
+          "min_ms": 78.48,
+          "max_ms": 110.74,
+          "p95_ms": 110.74,
           "samples": 10
         }
       },
@@ -119,51 +119,51 @@
       "name": "struct(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 46.79,
-          "min_ms": 37.0,
-          "max_ms": 89.13,
-          "p95_ms": 89.13,
+          "mean_ms": 39.12,
+          "min_ms": 36.2,
+          "max_ms": 44.62,
+          "p95_ms": 44.62,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 96.09,
-          "min_ms": 66.52,
-          "max_ms": 165.86,
-          "p95_ms": 165.86,
+          "mean_ms": 35.89,
+          "min_ms": 32.15,
+          "max_ms": 39.84,
+          "p95_ms": 39.84,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 121.69,
-          "min_ms": 108.56,
-          "max_ms": 137.71,
-          "p95_ms": 137.71,
+          "mean_ms": 146.21,
+          "min_ms": 104.17,
+          "max_ms": 307.38,
+          "p95_ms": 307.38,
           "samples": 10
         }
       },
-      "winner": "zephyr"
+      "winner": "lua"
     },
     {
       "name": "coroutine(100K)",
       "results": {
         "zephyr": {
-          "mean_ms": 82.13,
-          "min_ms": 76.29,
-          "max_ms": 91.3,
-          "p95_ms": 91.3,
+          "mean_ms": 81.61,
+          "min_ms": 73.82,
+          "max_ms": 100.2,
+          "p95_ms": 100.2,
           "samples": 10
         },
         "lua": {
-          "mean_ms": 256.33,
-          "min_ms": 227.56,
-          "max_ms": 394.79,
-          "p95_ms": 394.79,
+          "mean_ms": 246.38,
+          "min_ms": 222.65,
+          "max_ms": 272.07,
+          "p95_ms": 272.07,
           "samples": 10
         },
         "gravity": {
-          "mean_ms": 17.35,
-          "min_ms": 14.62,
-          "max_ms": 22.06,
-          "p95_ms": 22.06,
+          "mean_ms": 16.45,
+          "min_ms": 15.12,
+          "max_ms": 18.81,
+          "p95_ms": 18.81,
           "samples": 10
         }
       },

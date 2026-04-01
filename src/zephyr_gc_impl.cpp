@@ -3313,10 +3313,146 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                 ++ip; break;
             }
             case BytecodeOp::R_RESUME: {
-                const Span span = instruction_span(instruction);
                 const Value& target = regs_ptr[instruction.src1];
-                ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target, span, *active_module_name));
-                regs_ptr[instruction.dst] = result;
+                if (!target.is_object() || target.as_object()->kind != ObjectKind::Coroutine) {
+                    const Span span = instruction_span(instruction);
+                    return make_loc_error<Value>(*active_module_name, span, "resume expects a coroutine value.");
+                }
+                auto* co = static_cast<CoroutineObject*>(target.as_object());
+                // Ultra-fast inline resume for started single-frame register-mode coroutines
+                if (co->started && !co->completed &&
+                    co->frames.size() == 1 && co->frames[0].uses_register_mode) {
+                    co->suspended = false;
+                    ++co->resume_count;
+                    auto& cf = co->frames.front();
+                    const BytecodeFunction& co_chunk = *cf.bytecode;
+                    Value* co_regs = (cf.reg_count > 0 && cf.regs.empty())
+                        ? cf.inline_regs : cf.regs.data();
+                    const CompactInstruction* co_instrs = co_chunk.instructions.data();
+                    std::size_t co_ip = cf.ip_index;
+                    // Execute coroutine opcodes inline until yield or return
+                    for (;;) {
+                        const CompactInstruction& ci = co_instrs[co_ip];
+                        switch (ci.op) {
+                        case BytecodeOp::R_LOAD_CONST: {
+                            const int idx = unpack_r_index_operand(ci.operand);
+                            const BytecodeConstant& bc = co_chunk.constants[static_cast<std::size_t>(idx)];
+                            if (const auto* iv = std::get_if<std::int64_t>(&bc))
+                                co_regs[unpack_r_dst_operand(ci.operand)] = Value::integer(*iv);
+                            ++co_ip; break;
+                        }
+                        case BytecodeOp::R_LOAD_INT:
+                            co_regs[unpack_r_load_int_dst(ci.operand)] = Value::integer(unpack_r_load_int_value(ci.operand));
+                            ++co_ip; break;
+                        case BytecodeOp::R_LOAD_UPVALUE: {
+                            const std::uint8_t uv_dst = unpack_r_dst_operand(ci.operand);
+                            const int uv_slot = unpack_r_index_operand(ci.operand);
+                            if (!cf.captured_upvalues.empty() && static_cast<std::size_t>(uv_slot) < cf.captured_upvalues.size())
+                                co_regs[uv_dst] = cf.captured_upvalues[static_cast<std::size_t>(uv_slot)]->value;
+                            ++co_ip; break;
+                        }
+                        case BytecodeOp::R_ADDI: {
+                            const Value& s = co_regs[unpack_r_addi_src(ci.operand)];
+                            if (s.is_int()) {
+                                int64_t sum = s.as_int() + unpack_r_addi_imm(ci.operand);
+                                if (sum >= Value::kIntMin && sum <= Value::kIntMax) {
+                                    co_regs[unpack_r_addi_dst(ci.operand)] = Value::integer(sum);
+                                    ++co_ip; break;
+                                }
+                            }
+                            goto co_slow;
+                        }
+                        case BytecodeOp::R_ADD: {
+                            const Value& l = co_regs[ci.src1], &r = co_regs[ci.src2];
+                            if (l.is_int() && r.is_int()) {
+                                std::int64_t ir;
+                                if (try_add_int48(l.as_int(), r.as_int(), ir)) {
+                                    co_regs[ci.dst] = Value::integer(ir);
+                                    ++co_ip; break;
+                                }
+                            }
+                            goto co_slow;
+                        }
+                        case BytecodeOp::R_SUB: {
+                            const Value& l = co_regs[ci.src1], &r = co_regs[ci.src2];
+                            if (l.is_int() && r.is_int()) {
+                                std::int64_t ir;
+                                if (try_sub_int48(l.as_int(), r.as_int(), ir)) {
+                                    co_regs[ci.dst] = Value::integer(ir);
+                                    ++co_ip; break;
+                                }
+                            }
+                            goto co_slow;
+                        }
+                        case BytecodeOp::R_MOVE:
+                            co_regs[ci.dst] = co_regs[ci.src1];
+                            ++co_ip; break;
+                        case BytecodeOp::R_JUMP:
+                            co_ip = static_cast<std::size_t>(ci.operand);
+                            break;
+                        case BytecodeOp::R_SI_CMP_JUMP_FALSE: {
+                            const std::uint8_t s1 = unpack_r_si_cmp_jump_false_src1(ci.operand);
+                            const std::uint8_t s2 = unpack_r_si_cmp_jump_false_src2(ci.operand);
+                            const BytecodeOp cop = unpack_r_si_cmp_jump_false_compare_op(ci.operand);
+                            const Value& l = co_regs[s1], &r = co_regs[s2];
+                            if (l.is_int() && r.is_int()) {
+                                const auto a = l.as_int(), b = r.as_int();
+                                bool cv;
+                                switch (cop) {
+                                case BytecodeOp::R_LT: cv = a < b; break;
+                                case BytecodeOp::R_LE: cv = a <= b; break;
+                                case BytecodeOp::R_GT: cv = a > b; break;
+                                case BytecodeOp::R_GE: cv = a >= b; break;
+                                case BytecodeOp::R_EQ: cv = a == b; break;
+                                case BytecodeOp::R_NE: cv = a != b; break;
+                                default: cv = false; break;
+                                }
+                                if (cv) { ++co_ip; } else {
+                                    const InstructionMetadata& m = co_chunk.metadata[co_ip];
+                                    co_ip = m.jump_table.empty() ? co_ip + 1 : static_cast<std::size_t>(m.jump_table.front());
+                                }
+                                break;
+                            }
+                            goto co_slow;
+                        }
+                        case BytecodeOp::R_YIELD: {
+                            const Value yv = co_regs[ci.src1];
+                            cf.ip_index = co_ip + 1;
+                            co->suspended = true;
+                            ++co->yield_count;
+                            regs_ptr[instruction.dst] = yv;
+                            goto co_done;
+                        }
+                        case BytecodeOp::R_RETURN: {
+                            const Value rv = co_regs[ci.src1];
+                            co->completed = true;
+                            co->suspended = false;
+                            regs_ptr[instruction.dst] = rv;
+                            goto co_done;
+                        }
+                        default:
+                            goto co_slow;
+                        }
+                        continue;
+                    co_slow:
+                        // Fall back to full resume_coroutine_value for unsupported opcodes
+                        cf.ip_index = co_ip;
+                        {
+                            const Span span = instruction_span(instruction);
+                            ZEPHYR_TRY_ASSIGN(slow_result, resume_coroutine_value(target, span, *active_module_name));
+                            regs_ptr[instruction.dst] = slow_result;
+                        }
+                        goto co_done;
+                    }
+                co_done:
+                    ++ip; break;
+                }
+                // Slow path: first resume, multi-frame, or non-register-mode
+                {
+                    const Span span = instruction_span(instruction);
+                    ZEPHYR_TRY_ASSIGN(result, resume_coroutine_value(target, span, *active_module_name));
+                    regs_ptr[instruction.dst] = result;
+                }
                 ++ip; break;
             }
             case BytecodeOp::R_MAKE_COROUTINE: {
