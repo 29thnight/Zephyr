@@ -1,4 +1,4 @@
-# Zephyr — Current State (2026-03-30)
+# Zephyr — Current State (2026-04-01)
 
 ## Project Structure
 
@@ -53,13 +53,32 @@ Compile flags: `/utf-8 /bigobj /permissive-` (MSVC), `-Wall -Wextra` (GCC/Clang)
 
 ## VM Architecture
 
-- Register-based bytecode with superinstruction fusion (SI_ADD_STORE, SI_CMP_JUMP, etc.)
+- Register-based bytecode with superinstruction fusion
 - Spill fallback for >256 locals (R_SPILL_LOAD / R_SPILL_STORE, format v2)
 - Register allocator: live range analysis, copy propagation
 - Two-pass semacheck: declaration hoisting + trait impl completeness
 - String interning with GC root registration
 - Module bytecode caching (mtime-based invalidation)
 - Zero AST fallback in Release builds
+
+### 슈퍼인스트럭션 목록
+
+| Opcode | 설명 |
+|---|---|
+| `R_SI_ADD_STORE` / `R_SI_SUB_STORE` / `R_SI_MUL_STORE` | 연산 + 목적지 이동 |
+| `R_SI_CMP_JUMP_FALSE` | 비교 + 조건부 점프 |
+| `R_SI_CMPI_JUMP_FALSE` | 즉시값 비교 + 조건부 점프 |
+| `R_ADDI_JUMP` | 증가 + 무조건 점프 |
+| `R_SI_ADDI_CMPI_LT_JUMP` | 증가 + 상한 비교 + 조건부 점프 (루프 back-edge) |
+| `R_SI_MODI_ADD_STORE` | `dst = accum + (src % imm)` |
+| `R_SI_LOOP_STEP` | 루프 한 스텝 전체: `accum += iter%div; iter += step; if iter < limit goto body` |
+
+### 인라인 캐시 (IC)
+
+`CompactInstruction`의 `mutable ic_shape` / `mutable ic_slot` 필드를 활용합니다.
+
+- **R_BUILD_STRUCT IC**: 첫 번째 실행 후 `StructTypeObject*`를 캐시. 이후 호출은 타입 탐색·문자열 비교 없이 객체를 직접 할당합니다.
+- **StructTypeObject::cached_shape**: Shape 계산(벡터 할당 + 해시맵 조회)을 첫 번째 인스턴스 생성 시 1회로 제한합니다.
 
 ## GC
 
@@ -80,11 +99,11 @@ Compile flags: `/utf-8 /bigobj /permissive-` (MSVC), `-Wall -Wextra` (GCC/Clang)
 
 ## Latest Benchmark (5/5 gates PASS)
 
-| Case | Mean | Key metric |
-|---|---|---|
-| module_import | 838 µs | 16 opcodes |
-| hot_arithmetic_loop | 1.13 ms | v1 대비 99.89% 개선 |
-| array_object_churn | 4.31 ms | 0 full GC cycles |
-| host_handle_entity | 1.92 ms | 641 ns/resolve |
-| coroutine_yield_resume | 238 µs | 593 ns/resume |
-| serialization_export | 26.5 µs | — |
+| Case | Mean | Lua 5.5 | 비율 | Key metric |
+|---|---|---|---|---|
+| module_import | 838 µs | — | — | 16 opcodes |
+| hot_arithmetic_loop | ~420 µs | 394 µs | 1.07× | 1 op/iter (R_SI_LOOP_STEP) |
+| array_object_churn | ~1,050 µs | 1,909 µs | **0.55×** ✓ | R_BUILD_STRUCT IC |
+| host_handle_entity | ~224 µs | 303 µs | **0.74×** ✓ | — |
+| coroutine_yield_resume | ~220 µs | 923 µs | **0.24×** ✓ | — |
+| serialization_export | 26.5 µs | — | — | — |

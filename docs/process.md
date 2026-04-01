@@ -4,6 +4,55 @@
 
 ---
 
+## 2026-04-01
+
+### VM 최적화 — 슈퍼인스트럭션 & 인라인 캐시
+
+#### R_BUILD_STRUCT 인라인 캐시 + StructTypeObject Shape 캐시
+
+`array_object_churn` 벤치마크의 진짜 병목이 GC가 아닌 `R_BUILD_STRUCT` opcode의 매 호출마다 수행하는 문자열 기반 타입 탐색임을 확인하고, 두 가지 캐시를 도입했습니다.
+
+- **IC fast-path**: `ic_shape`(StructTypeObject*)와 `ic_slot==1`(필드 순서 일치 플래그)를 활용해 두 번째 호출부터 `parse_type_name`, `expect_struct_type`, `field_slot`, `enforce_type`, `validate_handle_store`, 임시 벡터 할당을 전부 우회
+- **StructTypeObject::cached_shape**: `mutable Shape* cached_shape = nullptr` 추가; `initialize_struct_instance()`가 `shape_for_struct_type()`을 매번 호출하던 것을 첫 번째 인스턴스 생성 시 1회로 줄임
+- **단일 패스 필드 초기화**: IC warm-path에서 `assign(N, nil)` + 덮어쓰기 패턴 대신 `reserve(N)` + `push_back` × N으로 nil 쓰기 N번 제거
+
+결과: array_object_churn **2,330 µs → 1,050 µs (−56%)**, Lua 5.5(1,909 µs) 대비 **약 2배 빠름**.
+
+#### R_SI_LOOP_STEP 슈퍼인스트럭션
+
+`R_SI_MODI_ADD_STORE` + `R_SI_ADDI_CMPI_LT_JUMP`를 단일 opcode로 융합합니다.
+
+```
+accum += iter % div
+iter  += step
+if iter < limit then goto body_start
+```
+
+인코딩: `{dst=accum, src1=step(int8), src2=iter, operand_a=div}` + `ic_slot = (int16_limit << 16) | uint16_body_start`
+
+융합 조건: `dst == src1`(자기 누적), 동일 루프 카운터 레지스터, `body_start ≤ 0xFFFF`, step ∈ [-128,127], limit ∈ [-32768,32767]
+
+결과: hot_arithmetic **iter당 6 ops → 1 op**, **2,170 µs → 420 µs**, Lua 5.5(394 µs) 대비 **1.07×**.
+
+#### UB 수정 (Signed left-shift)
+
+Copilot 리뷰에서 지적된 4개 위치의 부호 있는 값 좌시프트(UB) 수정:
+- `try_pack_r_addi_operand`, `try_pack_r_modi_operand`, `try_pack_r_si_acj`, `try_pack_r_si_cmpi_jump_false_operand`
+- 부호 있는 int8/int16 값을 `uint32_t`로 캐스트 후 시프트, 최종 결과를 `static_cast<int>`로 변환
+
+#### 벤치마크 추이
+
+| 단계 | hot_arithmetic | array_object_churn |
+|---|---|---|
+| 2026-03-30 기준 | 1,130 µs | 4,310 µs |
+| +R_SI_ADDI_CMPI_LT_JUMP | 535 µs | — |
+| +R_BUILD_STRUCT IC | — | 2,330 µs |
+| +R_BUILD_STRUCT IC + Shape 캐시 | — | 1,050 µs |
+| +R_SI_LOOP_STEP | 420 µs | — |
+| **최종 (Lua 5.5 기준)** | **1.07×** | **0.55×** |
+
+---
+
 ## 2026-03-30 (오늘)
 
 ### CMake 마이그레이션 완성
@@ -82,9 +131,11 @@
 
 ## Benchmark History
 
-| Date | hot_arithmetic | coroutine/resume | host/resolve | Gates |
-|---|---|---|---|---|
-| v1 baseline | 1,000 ms | 74,813 ns | 33,333 ns | — |
-| Wave D | 3.91 ms | 878 ns | 660 ns | 5/5 |
-| Register VM | 2.17 ms | 635 ns | 641 ns | 5/5 |
-| 2026-03-30 | 1.13 ms | 593 ns | 641 ns | 5/5 |
+| Date | hot_arithmetic | array_churn | coroutine/resume | host/resolve | Gates |
+|---|---|---|---|---|---|
+| v1 baseline | 1,000 ms | — | 74,813 ns | 33,333 ns | — |
+| Wave D | 3.91 ms | — | 878 ns | 660 ns | 5/5 |
+| Register VM | 2.17 ms | — | 635 ns | 641 ns | 5/5 |
+| 2026-03-30 | 1.13 ms | 4,310 µs | 593 ns | 641 ns | 5/5 |
+| 2026-04-01 | **~420 µs** | **~1,050 µs** | ~220 µs | ~224 µs | 5/5 |
+| Lua 5.5 (ref) | 394 µs | 1,909 µs | 923 µs | 303 µs | — |

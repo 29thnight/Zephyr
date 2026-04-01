@@ -30,6 +30,7 @@
 
   * [Embedding](embedding.md)
   * [Architecture](../ARCHITECTURE.md)
+  * [VM Optimization](vm-optimization.md)
 
 * INTERNALS
 
