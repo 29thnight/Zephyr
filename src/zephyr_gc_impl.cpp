@@ -3426,22 +3426,41 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     closure_env,
                     meta.bytecode,
                     return_type_str);
-                ensure_coroutine_trace_id(coroutine);
-                record_coroutine_trace_event(CoroutineTraceEvent::Type::Created, coroutine);
-                coroutine->frames.front().global_resolution_env =
-                    module_or_root_environment(coroutine->frames.front().closure);
+
+                auto& root = coroutine->frames.front();
+                root.global_resolution_env = module_or_root_environment(root.closure);
 
                 // Create upvalue cells directly from parent registers (same as R_MAKE_FUNCTION)
-                if (!meta.jump_table.empty() && coroutine->frames.front().bytecode != nullptr) {
-                    auto& frame_upvalues = coroutine->frames.front().captured_upvalues;
-                    frame_upvalues.reserve(meta.jump_table.size());
+                if (!meta.jump_table.empty() && root.bytecode != nullptr) {
+                    root.captured_upvalues.reserve(meta.jump_table.size());
                     for (std::size_t i = 0; i < meta.jump_table.size(); ++i) {
-                        frame_upvalues.push_back(
+                        root.captured_upvalues.push_back(
                             allocate<UpvalueCellObject>(
                                 regs_ptr[meta.jump_table[i]], true, std::nullopt,
                                 HandleContainerKind::CoroutineFrame));
                     }
                 }
+
+                // Pre-initialize coroutine frame (move from first-resume to creation time)
+                // This ensures ALL resumes take the fiber-style fast path in R_RESUME.
+                root.root_env = allocate<Environment>(root.closure);
+                if (root.bytecode != nullptr) {
+                    install_upvalue_bindings(root.root_env, *root.bytecode, root.captured_upvalues);
+                }
+                root.current_env = root.root_env;
+                root.uses_register_mode = root.bytecode != nullptr && root.bytecode->uses_register_mode;
+                if (root.bytecode && root.uses_register_mode) {
+                    const int needed = std::max(root.bytecode->max_regs, root.bytecode->local_count);
+                    if (needed > 0 && needed <= CoroutineFrameState::kInlineRegs) {
+                        root.reg_count = static_cast<std::uint8_t>(needed);
+                        std::fill_n(root.inline_regs, needed, Value::nil());
+                    } else if (needed > 0) {
+                        root.regs.assign(static_cast<std::size_t>(needed), Value::nil());
+                    }
+                }
+                root.ip = 0;
+                root.ip_index = 0;
+                coroutine->started = true;
 
                 regs_ptr[instruction.dst] = Value::object(coroutine);
                 ++ip; break;
