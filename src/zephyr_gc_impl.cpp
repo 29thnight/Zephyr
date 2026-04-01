@@ -2523,6 +2523,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     // Skip for functions with upvalues (C dispatch doesn't support R_LOAD_UPVALUE yet).
     static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
                   "CompactInstruction and ZInstruction must have identical layout.");
+    // Skip C dispatch for functions with upvalues OR R_MAKE_FUNCTION (not yet in C dispatch table).
+    // These fall back to call_value which misses the iterative frame stack.
     if (captured_upvalues == nullptr || captured_upvalues->empty()) {
         // Extract int constants
         std::vector<int64_t> c_int_constants(chunk.constants.size());
