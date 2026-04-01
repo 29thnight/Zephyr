@@ -16,10 +16,8 @@ echo Source: %ZEPHYR_ROOT%
 if not exist "%ZEPHYR_ROOT%\build" mkdir "%ZEPHYR_ROOT%\build"
 pushd "%ZEPHYR_ROOT%\build"
 
-set CLANG_CL="C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin\clang-cl.exe"
-
-echo Configuring with Clang-cl...
-%CMAKE% -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=%CLANG_CL% -DCMAKE_CXX_COMPILER=%CLANG_CL% "%ZEPHYR_ROOT%" 2>&1
+echo Configuring with MSVC...
+%CMAKE% -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release "%ZEPHYR_ROOT%" 2>&1
 if errorlevel 1 (
     echo ERROR: CMake configure failed
     popd

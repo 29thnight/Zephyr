@@ -71,6 +71,30 @@ CASES = [
         },
     },
     {
+        "name": "entity_update(1M)",
+        "scripts": {
+            "zephyr": "scripts/entity_update.zph",
+            "lua": "scripts/entity_update.lua",
+            "gravity": "scripts/entity_update.gravity",
+        },
+    },
+    {
+        "name": "event_dispatch(100K)",
+        "scripts": {
+            "zephyr": "scripts/event_dispatch.zph",
+            "lua": "scripts/event_dispatch.lua",
+            "gravity": "scripts/event_dispatch.gravity",
+        },
+    },
+    {
+        "name": "vector_math(1M)",
+        "scripts": {
+            "zephyr": "scripts/vector_math.zph",
+            "lua": "scripts/vector_math.lua",
+            "gravity": "scripts/vector_math.gravity",
+        },
+    },
+    {
         "name": "coroutine(100K)",
         "scripts": {
             "zephyr": "scripts/coroutine.zph",

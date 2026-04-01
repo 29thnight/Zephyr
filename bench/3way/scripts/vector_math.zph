@@ -1,0 +1,16 @@
+fn main() {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 1000000 {
+        let ax: int = i % 1000;
+        let ay: int = (i + 1) % 1000;
+        let bx: int = (i + 2) % 1000;
+        let by: int = (i + 3) % 1000;
+        let dot: int = ax * bx + ay * by;
+        let dx: int = ax - bx;
+        let dy: int = ay - by;
+        let dist_sq: int = dx * dx + dy * dy;
+        total = (total + dot + dist_sq) % 1000000;
+        i = i + 1;
+    }
+}

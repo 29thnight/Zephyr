@@ -1,0 +1,22 @@
+func handle_move(x) { return x + 1; }
+func handle_attack(x) { return x + 10; }
+func handle_heal(x) { return x + 5; }
+func handle_idle(x) { return x; }
+
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 100000) {
+        var event_type = i % 4;
+        if (event_type == 0) {
+            total = handle_move(total);
+        } else if (event_type == 1) {
+            total = handle_attack(total);
+        } else if (event_type == 2) {
+            total = handle_heal(total);
+        } else {
+            total = handle_idle(total);
+        }
+        i = i + 1;
+    }
+}

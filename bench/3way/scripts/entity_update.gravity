@@ -1,0 +1,19 @@
+func main() {
+    var px = 0;
+    var py = 0;
+    var vx = 1;
+    var vy = 0;
+    var gravity = -1;
+
+    var frame = 0;
+    while (frame < 100) {
+        var entity = 0;
+        while (entity < 10000) {
+            px = px + vx;
+            py = py + vy;
+            vy = vy + gravity;
+            entity = entity + 1;
+        }
+        frame = frame + 1;
+    }
+}

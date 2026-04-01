@@ -1,7 +1,9 @@
 // zephyr_gc_impl.cpp — Generational GC: nursery/old-gen allocation, tracing,
 // mark-and-sweep, card table, write barrier, and coroutine frame compaction.
 #include "zephyr_internal.hpp"
+#if defined(__clang__) || defined(__GNUC__)
 #include "zephyr_vm_dispatch.h"
+#endif
 
 namespace zephyr {
 
@@ -2520,9 +2522,8 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
     std::size_t instructions_size = chunk.instructions.size();
 
-    // ── C Dispatch Fast Path (computed goto) ────────────────────────
-    // Try C dispatch for pure register-mode functions. Falls back to C++ for cold opcodes.
-    // Skip for functions with upvalues (C dispatch doesn't support R_LOAD_UPVALUE yet).
+    // ── C Dispatch Fast Path (computed goto, Clang/GCC only) ────────
+#if defined(__clang__) || defined(__GNUC__)
     static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
                   "CompactInstruction and ZInstruction must have identical layout.");
     static_assert(static_cast<int>(BytecodeOp::R_ADD) == ZOP_R_ADD);
@@ -2532,8 +2533,6 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     static_assert(static_cast<int>(BytecodeOp::R_LOAD_UPVALUE) == ZOP_R_LOAD_UPVALUE);
     static_assert(static_cast<int>(BytecodeOp::R_MAKE_FUNCTION) == ZOP_R_MAKE_FUNCTION);
     static_assert(static_cast<int>(BytecodeOp::R_RESUME) == ZOP_R_RESUME);
-    // Skip C dispatch for functions with upvalues OR R_MAKE_FUNCTION (not yet in C dispatch table).
-    // These fall back to call_value which misses the iterative frame stack.
     if (captured_upvalues == nullptr || captured_upvalues->empty()) {
         // Extract int constants
         std::vector<int64_t> c_int_constants(chunk.constants.size());
@@ -2634,6 +2633,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
         regs_ptr = reinterpret_cast<Value*>(dstate.regs);
         // Continue with existing C++ dispatch loop below
     }
+#endif // __clang__ || __GNUC__
 
     for (;;) {
         const CompactInstruction& instruction = instructions_ptr[ip];

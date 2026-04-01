@@ -1,0 +1,22 @@
+fn handle_move(x: int) -> int { return x + 1; }
+fn handle_attack(x: int) -> int { return x + 10; }
+fn handle_heal(x: int) -> int { return x + 5; }
+fn handle_idle(x: int) -> int { return x; }
+
+fn main() {
+    let mut total: int = 0;
+    let mut i: int = 0;
+    while i < 100000 {
+        let event_type: int = i % 4;
+        if event_type == 0 {
+            total = handle_move(total);
+        } else if event_type == 1 {
+            total = handle_attack(total);
+        } else if event_type == 2 {
+            total = handle_heal(total);
+        } else {
+            total = handle_idle(total);
+        }
+        i = i + 1;
+    }
+}

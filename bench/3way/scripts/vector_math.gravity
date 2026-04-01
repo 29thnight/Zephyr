@@ -1,0 +1,16 @@
+func main() {
+    var total = 0;
+    var i = 0;
+    while (i < 1000000) {
+        var ax = i % 1000;
+        var ay = (i + 1) % 1000;
+        var bx = (i + 2) % 1000;
+        var by = (i + 3) % 1000;
+        var dot = ax * bx + ay * by;
+        var dx = ax - bx;
+        var dy = ay - by;
+        var dist_sq = dx * dx + dy * dy;
+        total = (total + dot + dist_sq) % 1000000;
+        i = i + 1;
+    }
+}

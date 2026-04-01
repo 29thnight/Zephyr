@@ -1,0 +1,21 @@
+struct Vec2 { x: int, y: int }
+
+fn main() {
+    let mut px: int = 0;
+    let mut py: int = 0;
+    let mut vx: int = 1;
+    let mut vy: int = 0;
+    let gravity: int = -1;
+
+    let mut frame: int = 0;
+    while frame < 100 {
+        let mut entity: int = 0;
+        while entity < 10000 {
+            px = px + vx;
+            py = py + vy;
+            vy = vy + gravity;
+            entity = entity + 1;
+        }
+        frame = frame + 1;
+    }
+}
