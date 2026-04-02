@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/lance/source/Zephyr/build-msvc/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
