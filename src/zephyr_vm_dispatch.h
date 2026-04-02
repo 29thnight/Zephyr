@@ -62,8 +62,18 @@ enum {
     ZOP_R_MAKE_FUNCTION = 116,
     ZOP_R_MAKE_COROUTINE = 117,
     ZOP_R_RESUME = 118,
+    ZOP_R_SI_MUL_ADD = 119,
     ZOP_MAX = 128
 };
+
+/* ── Hot instruction layout (matches C++ HotInstruction, 8 bytes) ────── */
+typedef struct {
+    int32_t op;
+    union {
+        int32_t operand;
+        struct { uint8_t dst, src1, src2, operand_a; };
+    };
+} ZHotInstruction;
 
 /* ── Compact instruction layout (matches C++ CompactInstruction) ─────── */
 typedef struct {
@@ -101,7 +111,8 @@ typedef struct {
     size_t reg_pool_capacity;
     size_t register_sp;
     size_t ip;
-    const ZInstruction* instructions;
+    const ZHotInstruction* hot_instructions;  /* hot array (op + operand, 8B each) */
+    const ZInstruction* instructions;         /* cold array (IC/jump_target/span) */
     size_t instructions_size;
 
     /* Bytecode constants: array of int64_t for fast int access */

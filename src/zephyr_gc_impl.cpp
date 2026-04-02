@@ -2555,6 +2555,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     static_assert(static_cast<int>(BytecodeOp::R_LOAD_UPVALUE) == ZOP_R_LOAD_UPVALUE);
     static_assert(static_cast<int>(BytecodeOp::R_MAKE_FUNCTION) == ZOP_R_MAKE_FUNCTION);
     static_assert(static_cast<int>(BytecodeOp::R_RESUME) == ZOP_R_RESUME);
+    static_assert(static_cast<int>(BytecodeOp::R_SI_MUL_ADD) == ZOP_R_SI_MUL_ADD);
     static_assert(static_cast<int>(BytecodeOp::R_YIELD) == ZOP_R_YIELD);
     static_assert(static_cast<int>(BytecodeOp::R_STORE_UPVALUE) == ZOP_R_STORE_UPVALUE);
     {
@@ -3735,6 +3736,24 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ++ip;
                 }
                 break;
+            case BytecodeOp::R_SI_MUL_ADD: {
+                const Value& ma_a = regs_ptr[instruction.src1];
+                const Value& ma_b = regs_ptr[instruction.src2];
+                const Value& ma_c = regs_ptr[instruction.operand_a];
+                if (ma_a.is_int() && ma_b.is_int() && ma_c.is_int()) {
+                    std::int64_t prod = 0, ma_result = 0;
+                    if (try_mul_int48(ma_a.as_int(), ma_b.as_int(), prod) &&
+                        try_add_int48(prod, ma_c.as_int(), ma_result)) {
+                        regs_ptr[instruction.dst] = Value::integer(ma_result);
+                        ++ip; break;
+                    }
+                }
+                { const Span span = instruction_span(instructions_ptr[ip]);
+                ZEPHYR_TRY_ASSIGN(mul_result, apply_binary_op(TokenType::Star, regs_ptr[instruction.src1], regs_ptr[instruction.src2], span, module.name));
+                ZEPHYR_TRY_ASSIGN(add_result, apply_binary_op(TokenType::Plus, mul_result, regs_ptr[instruction.operand_a], span, module.name));
+                regs_ptr[instruction.dst] = add_result; }
+                ++ip; break;
+            }
             case BytecodeOp::R_SI_ADD_STORE:
             case BytecodeOp::R_SI_SUB_STORE:
             case BytecodeOp::R_SI_MUL_STORE: {
@@ -6197,6 +6216,24 @@ Runtime::resume_register_coroutine_fast(CoroutineObject* coroutine, const Span& 
             { const Span s = instruction_span(cold_instr); ZEPHYR_TRY_ASSIGN(r, apply_binary_op(TokenType::Star, lv, rv, s, module_name)); regs_ptr[instr.dst] = r; }
             ++local_ip; break;
         }
+        case BytecodeOp::R_SI_MUL_ADD: {
+            const Value& a = regs_ptr[instr.src1];
+            const Value& b = regs_ptr[instr.src2];
+            const Value& c = regs_ptr[instr.operand_a];
+            if (a.is_int() && b.is_int() && c.is_int()) {
+                std::int64_t prod = 0, result = 0;
+                if (try_mul_int48(a.as_int(), b.as_int(), prod) &&
+                    try_add_int48(prod, c.as_int(), result)) {
+                    regs_ptr[instr.dst] = Value::integer(result);
+                    ++local_ip; break;
+                }
+            }
+            { const Span s = instruction_span(cold_instr);
+            ZEPHYR_TRY_ASSIGN(mul_result, apply_binary_op(TokenType::Star, regs_ptr[instr.src1], regs_ptr[instr.src2], s, module_name));
+            ZEPHYR_TRY_ASSIGN(add_result, apply_binary_op(TokenType::Plus, mul_result, regs_ptr[instr.operand_a], s, module_name));
+            regs_ptr[instr.dst] = add_result; }
+            ++local_ip; break;
+        }
         case BytecodeOp::R_SI_MODI_ADD_STORE: {
             const Value& sma_acc = regs_ptr[instr.src1];
             const Value& sma_src = regs_ptr[instr.src2];
@@ -7256,6 +7293,17 @@ RuntimeResult<Runtime::CoroutineExecutionResult> Runtime::resume_coroutine_singl
                     } else {
                         ++local_ip;
                     }
+                    break;
+                }
+                case BytecodeOp::R_SI_MUL_ADD: {
+                    ZEPHYR_TRY_ASSIGN(dst, register_index(instruction.dst, span));
+                    ZEPHYR_TRY_ASSIGN(s1, register_index(instruction.src1, span));
+                    ZEPHYR_TRY_ASSIGN(s2, register_index(instruction.src2, span));
+                    ZEPHYR_TRY_ASSIGN(s3, register_index(instruction.operand_a, span));
+                    ZEPHYR_TRY_ASSIGN(mul_r, binary_fast_or_fallback(BytecodeOp::R_MUL, regs_ptr[s1], regs_ptr[s2], span));
+                    ZEPHYR_TRY_ASSIGN(add_r, binary_fast_or_fallback(BytecodeOp::R_ADD, mul_r, regs_ptr[s3], span));
+                    regs_ptr[dst] = add_r;
+                    ++local_ip;
                     break;
                 }
                 case BytecodeOp::R_SI_ADD_STORE:
@@ -13637,6 +13685,7 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
             case BytecodeOp::R_SI_ADD_STORE:
             case BytecodeOp::R_SI_SUB_STORE:
             case BytecodeOp::R_SI_MUL_STORE:
+            case BytecodeOp::R_SI_MUL_ADD:
             case BytecodeOp::R_SI_CMP_JUMP_FALSE:
             case BytecodeOp::R_SI_LOAD_ADD_STORE:
             case BytecodeOp::R_SI_MODI_ADD_STORE:
@@ -13802,6 +13851,12 @@ std::string Runtime::dump_bytecode(const std::string& module_name, const std::st
                     case BytecodeOp::R_GE:
                     case BytecodeOp::R_EQ:
                     case BytecodeOp::R_NE:
+                    case BytecodeOp::R_SI_MUL_ADD:
+                        out << " dst=r" << static_cast<int>(instruction.dst)
+                            << " src1=r" << static_cast<int>(instruction.src1)
+                            << " src2=r" << static_cast<int>(instruction.src2)
+                            << " addend=r" << static_cast<int>(instruction.operand_a);
+                        break;
                     case BytecodeOp::R_SI_ADD_STORE:
                     case BytecodeOp::R_SI_SUB_STORE:
                     case BytecodeOp::R_SI_MUL_STORE:

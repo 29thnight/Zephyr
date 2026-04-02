@@ -123,6 +123,7 @@ enum class BytecodeOp {
     R_MAKE_FUNCTION,
     R_MAKE_COROUTINE, // dst=reg; metadata.bytecode=coroutine_body; same pattern as R_MAKE_FUNCTION
     R_RESUME,          // dst=reg, src1=coroutine_reg; dst = resume(src1) // dst=reg; metadata.bytecode=inner_func, metadata.names=param_info, metadata.string_operand=func_name, metadata.type_name=return_type, metadata.jump_table=captured_reg_indices
+    R_SI_MUL_ADD,      // dst = src1 * src2 + operand_a; fused multiply-add for dot products
 };
 
 struct BytecodeFunction;
@@ -799,6 +800,7 @@ inline std::string bytecode_op_name(BytecodeOp op) {
         case BytecodeOp::R_MAKE_FUNCTION: return "R_MAKE_FUNCTION";
         case BytecodeOp::R_MAKE_COROUTINE: return "R_MAKE_COROUTINE";
         case BytecodeOp::R_RESUME: return "R_RESUME";
+        case BytecodeOp::R_SI_MUL_ADD: return "R_SI_MUL_ADD";
     }
     return "Unknown";
 }
@@ -3842,6 +3844,12 @@ inline int recompute_register_max(const BytecodeFunction& function) {
                 note_reg(instruction.dst);
                 note_reg(instruction.src1);
                 break;
+            case BytecodeOp::R_SI_MUL_ADD:
+                note_reg(instruction.dst);
+                note_reg(instruction.src1);
+                note_reg(instruction.src2);
+                note_reg(instruction.operand_a);
+                break;
             default:
                 break;
         }
@@ -3911,6 +3919,28 @@ inline void optimize_register_bytecode(BytecodeFunction* func) {
                 ++func->superinstruction_fusions;
                 changed = true;
                 continue;
+            }
+
+            // R_MUL(tmp, rA, rB) + R_ADD(dst, tmp, rC) → R_SI_MUL_ADD(dst, rA, rB, rC)
+            // Also handles commuted R_ADD(dst, rC, tmp). Fused multiply-add for dot products.
+            if (code[i].op == BytecodeOp::R_MUL &&
+                code[j].op == BytecodeOp::R_ADD) {
+                const std::uint8_t mul_dst = code[i].dst;
+                bool fuse = false;
+                std::uint8_t add_other = 0;
+                if (code[j].src1 == mul_dst) { add_other = code[j].src2; fuse = true; }
+                else if (code[j].src2 == mul_dst) { add_other = code[j].src1; fuse = true; }
+                if (fuse) {
+                    // src1=rA, src2=rB already set from R_MUL
+                    code[i].op = BytecodeOp::R_SI_MUL_ADD;
+                    code[i].dst = code[j].dst;
+                    code[i].operand_a = add_other; // rC
+                    metadata[i] = metadata[j];
+                    deleted[j] = true;
+                    ++func->superinstruction_fusions;
+                    changed = true;
+                    continue;
+                }
             }
 
             // R_MODI(tmp, src, imm) + R_MOVE(dst, tmp) → R_MODI(dst, src, imm)
