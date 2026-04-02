@@ -404,6 +404,11 @@ inline std::int64_t unpack_r_modi_imm(int operand) { return static_cast<std::int
 
 // R_SI_ADDI_CMPI_LT_JUMP: reg += addi; if (reg < limit) goto ic_slot else fall-through
 // encoding: (int16_limit << 16) | (int8_addi << 8) | reg  — body_start jump target in ic_slot
+// NOTE: limit is packed as int16 [-32768, 32767]. Loops with larger limits (e.g. 1_000_000)
+// cannot use this superinstruction and fall back to R_ADDI_JUMP + R_SI_CMP_JUMP_FALSE.
+// The compiler also emits R_SI_CMP_JUMP_FALSE (reg-reg) instead of R_SI_CMPI_JUMP_FALSE
+// (reg-imm) when the limit doesn't fit in the CMPI immediate field, which further prevents
+// fusion since the pattern requires R_SI_CMPI_JUMP_FALSE at the jump target.
 inline bool try_pack_r_si_acj(std::uint8_t reg, std::int64_t addi, std::int64_t limit, int& packed) {
     if (addi < -128 || addi > 127) return false;
     if (limit < -32768 || limit > 32767) return false;
