@@ -1,0 +1,10 @@
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/ZephyrRuntime.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/zephyr_cli.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/zephyr_tests.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/zephyr_bench.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/zephyr_engine_sample.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/edit_cache.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/rebuild_cache.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/list_install_components.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/install.dir
+C:/Users/lance/source/Zephyr/.build/CMakeFiles/install/local.dir

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find \"C:\\\\Users\\\\lance\\\\OneDrive\\\\Documents\\\\Project Zephyr\" -name \"*.zph\" -type f -exec wc -l {})"
+      "Bash(find \"C:\\\\Users\\\\lance\\\\OneDrive\\\\Documents\\\\Project Zephyr\" -name \"*.zph\" -type f -exec wc -l {})",
+      "mcp__plugin_context-mode_context-mode__ctx_batch_execute"
     ]
   }
 }
