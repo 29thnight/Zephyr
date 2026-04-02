@@ -46,12 +46,13 @@ static inline int try_mul_i48(int64_t a, int64_t b, int64_t* out) {
 int zephyr_vm_dispatch(ZDispatchState* s, const ZCallbacks* cb) {
     /* Local aliases for hot state */
     ZephyrVal* regs = s->regs;
-    const ZInstruction* insns = s->instructions;
+    const ZHotInstruction* hot = s->hot_instructions;  /* 8B per insn — hot path */
+    const ZInstruction* cold = s->instructions;         /* 28B per insn — cold path (IC/jump) */
     size_t ip = s->ip;
     s->deopt_reason = ZDEOPT_NONE;
 
 #define DISPATCH() do { \
-    const void* _target = dispatch_table[insns[ip].op]; \
+    const void* _target = dispatch_table[hot[ip].op]; \
     if (_target) goto *_target; \
     goto slow_path; \
 } while(0)
@@ -87,7 +88,7 @@ int zephyr_vm_dispatch(ZDispatchState* s, const ZCallbacks* cb) {
     /* ── Hot opcode handlers ──────────────────────────────────────── */
 
 op_R_LOAD_CONST: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     int idx = unpack_idx(i->operand);
     uint8_t dst = unpack_dst(i->operand);
     if (idx >= 0 && (size_t)idx < s->constants_count && s->int_constant_valid[idx]) {
@@ -99,13 +100,13 @@ op_R_LOAD_CONST: {
 }
 
 op_R_LOAD_INT: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     regs[unpack_load_int_dst(i->operand)] = zv_integer(unpack_load_int_val(i->operand));
     NEXT();
 }
 
 op_R_ADDI: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     ZephyrVal src_val = regs[unpack_addi_src(i->operand)];
     int64_t imm = unpack_addi_imm(i->operand);
     if (zv_is_int(src_val)) {
@@ -119,7 +120,7 @@ op_R_ADDI: {
 }
 
 op_R_ADD: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     ZephyrVal lhs = regs[i->src1], rhs = regs[i->src2];
     if (zv_is_int(lhs) && zv_is_int(rhs)) {
         int64_t r;
@@ -132,7 +133,7 @@ op_R_ADD: {
 }
 
 op_R_SUB: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     ZephyrVal lhs = regs[i->src1], rhs = regs[i->src2];
     if (zv_is_int(lhs) && zv_is_int(rhs)) {
         int64_t r;
@@ -145,7 +146,7 @@ op_R_SUB: {
 }
 
 op_R_MUL: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     ZephyrVal lhs = regs[i->src1], rhs = regs[i->src2];
     if (zv_is_int(lhs) && zv_is_int(rhs)) {
         int64_t r;
@@ -158,24 +159,24 @@ op_R_MUL: {
 }
 
 op_R_MOVE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     regs[i->dst] = regs[i->src1];
     NEXT();
 }
 
 op_R_NOT: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     regs[i->dst] = zv_boolean(!zv_is_truthy(regs[i->src1]));
     NEXT();
 }
 
 op_R_JUMP: {
-    ip = (size_t)insns[ip].operand;
+    ip = (size_t)hot[ip].operand;
     DISPATCH();
 }
 
 op_R_JUMP_IF_FALSE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     if (!zv_is_truthy(regs[unpack_src(i->operand)])) {
         ip = (size_t)unpack_jump_target(i->operand);
     } else {
@@ -185,7 +186,7 @@ op_R_JUMP_IF_FALSE: {
 }
 
 op_R_JUMP_IF_TRUE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     if (zv_is_truthy(regs[unpack_src(i->operand)])) {
         ip = (size_t)unpack_jump_target(i->operand);
     } else {
@@ -195,7 +196,7 @@ op_R_JUMP_IF_TRUE: {
 }
 
 op_R_RETURN: {
-    ZephyrVal rv = regs[insns[ip].src1];
+    ZephyrVal rv = regs[hot[ip].src1];
     if (s->call_stack_sp > 0) {
         ZCallFrame* parent = &s->call_stack[s->call_stack_sp - 1];
         /* Restore from frame */
@@ -228,7 +229,7 @@ op_R_CALL: {
 }
 
 op_R_LOAD_GLOBAL: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     uint8_t dst = unpack_dst(i->operand);
     int slot = unpack_idx(i->operand);
     if (s->globals.resolved && slot >= 0 && (size_t)slot < s->globals.count) {
@@ -242,7 +243,7 @@ op_R_LOAD_GLOBAL: {
 }
 
 op_R_SI_CMP_JUMP_FALSE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     uint8_t s1 = unpack_cmp_s1(i->operand);
     uint8_t s2 = unpack_cmp_s2(i->operand);
     int cmp_op = unpack_cmp_op(i->operand);
@@ -265,8 +266,8 @@ op_R_SI_CMP_JUMP_FALSE: {
             DISPATCH();
         }
         /* Condition FALSE: use jump_target for O(1) direct access */
-        if (i->jump_target >= 0) {
-            ip = (size_t)i->jump_target;
+        if (cold[ip].jump_target >= 0) {
+            ip = (size_t)cold[ip].jump_target;
             DISPATCH();
         }
         /* Fall back to C++ for metadata jump target lookup */
@@ -278,7 +279,7 @@ op_R_SI_CMP_JUMP_FALSE: {
 }
 
 op_R_SI_ADDI_CMPI_LT_JUMP: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     uint8_t reg = unpack_acj_reg(i->operand);
     int64_t addi = unpack_acj_addi(i->operand);
     int64_t limit = unpack_acj_limit(i->operand);
@@ -288,7 +289,7 @@ op_R_SI_ADDI_CMPI_LT_JUMP: {
         if (val >= ZV_INT_MIN && val <= ZV_INT_MAX) {
             regs[reg] = zv_integer(val);
             if (val < limit) {
-                ip = (size_t)i->ic_slot; /* body_start stored in ic_slot */
+                ip = (size_t)cold[ip].ic_slot; /* body_start stored in ic_slot */
             } else {
                 ++ip;
             }
@@ -299,7 +300,7 @@ op_R_SI_ADDI_CMPI_LT_JUMP: {
 }
 
 op_R_LOAD_UPVALUE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     uint8_t dst = unpack_dst(i->operand);
     int slot = unpack_idx(i->operand);
     if (s->upvalue_cells && slot >= 0 && (size_t)slot < s->upvalue_count
@@ -312,7 +313,7 @@ op_R_LOAD_UPVALUE: {
 }
 
 op_R_STORE_UPVALUE: {
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     uint8_t src = unpack_dst(i->operand); /* src reg is in dst position */
     int slot = unpack_idx(i->operand);
     if (s->upvalue_cells && slot >= 0 && (size_t)slot < s->upvalue_count
@@ -326,7 +327,7 @@ op_R_STORE_UPVALUE: {
 
 op_R_RESUME: {
     /* Save state and return to C++ for coroutine frame swap */
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     s->ip = ip;
     s->regs = regs;
     s->coroutine_value = regs[i->src1]; /* coroutine object */
@@ -336,7 +337,7 @@ op_R_RESUME: {
 
 op_R_YIELD: {
     /* Save state and return to C++ for coroutine yield */
-    const ZInstruction* i = &insns[ip];
+    const ZHotInstruction* i = &hot[ip];
     s->ip = ip;
     s->regs = regs;
     s->coroutine_value = regs[i->src1]; /* yield value */
@@ -355,7 +356,8 @@ slow_path:
         /* C++ advanced ip and may have changed regs */
         ip = s->ip;
         regs = s->regs;
-        insns = s->instructions; /* may have changed after frame switch */
+        hot = s->hot_instructions;   /* may have changed after frame switch */
+        cold = s->instructions;
         DISPATCH();
     }
 

@@ -131,6 +131,17 @@ struct BytecodeFunction;
 #pragma warning(push)
 #pragma warning(disable : 4201)
 #endif
+
+struct HotInstruction {              // 8 bytes — accessed every dispatch cycle
+    BytecodeOp op = BytecodeOp::LoadConst;
+    union {
+        std::int32_t operand;
+        struct { std::uint8_t dst, src1, src2, operand_a; };
+    };
+    HotInstruction() : operand(0) {}
+};
+static_assert(sizeof(HotInstruction) == 8, "HotInstruction must be exactly 8 bytes for icache efficiency.");
+
 struct CompactInstruction {
     BytecodeOp op = BytecodeOp::LoadConst;
     union {
@@ -561,6 +572,19 @@ struct BytecodeFunction {
     mutable std::vector<Binding*> resolved_global_bindings;
     mutable std::vector<Environment*> resolved_global_owners;
     mutable bool globals_resolved = false;
+
+    // ── Hot/Cold instruction split (icache optimization) ──
+    mutable std::vector<HotInstruction> hot_instructions;
+
+    void ensure_hot_instructions() const {
+        if (hot_instructions.size() != instructions.size()) {
+            hot_instructions.resize(instructions.size());
+            for (std::size_t i = 0; i < instructions.size(); ++i) {
+                hot_instructions[i].op = instructions[i].op;
+                hot_instructions[i].operand = instructions[i].operand;
+            }
+        }
+    }
 };
 
 class RegisterAllocator {
@@ -4197,9 +4221,13 @@ inline void optimize_bytecode(BytecodeFunction& func) {
     auto& constants = func.constants;
     if (func.uses_register_mode) {
         optimize_register_bytecode(&func);
+        func.ensure_hot_instructions();
         return;
     }
-    if (code.size() < 2) return;
+    if (code.size() < 2) {
+        func.ensure_hot_instructions();
+        return;
+    }
     func.superinstruction_fusions = 0;
     func.total_original_opcode_count = code.size();
     const bool allow_superinstructions = !func.is_coroutine_body;
@@ -4474,6 +4502,9 @@ inline void optimize_bytecode(BytecodeFunction& func) {
     for (const auto& instr : code) {
         ++func.opcode_histogram[bytecode_op_name(instr.op)];
     }
+
+    // Build hot instruction array for icache efficiency.
+    func.ensure_hot_instructions();
 
     // Recursively optimize nested functions.
     for (auto& meta : metadata) {
