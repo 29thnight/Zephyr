@@ -363,5 +363,24 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # CMake build output
-build/build*/
+build/
+build*/
 .build/
+
+# Benchmark build artifacts
+bench/3way/gravity/CMakeCache.txt
+bench/3way/gravity/CMakeFiles/
+bench/3way/gravity/Makefile
+bench/3way/gravity/cmake_install.cmake
+bench/3way/gravity/src/
+bench/3way/gravity/lib/
+bench/3way/lua-5.5.0/*.obj
+bench/3way/lua-5.5.0/*.exe
+bench/3way/lua-5.5.0/*.lib
+bench/3way/lua-5.5.0/*.exp
+bench/3way/results/
+bench/3way/*.zip
+
+# Temp/scratch files
+optimize
+_build*.bat
