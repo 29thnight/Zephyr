@@ -2540,6 +2540,14 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
     const BytecodeConstant* __restrict constants_ptr = chunk.constants.data();
     std::size_t instructions_size = chunk.instructions.size();
 
+    auto reload_chunk_pointers = [&]() {
+        instructions_ptr = ctx.chunk->instructions.data();
+        hot_instrs = ctx.chunk->hot_instructions.data();
+        metadata_ptr = ctx.chunk->metadata.data();
+        constants_ptr = ctx.chunk->constants.data();
+        instructions_size = ctx.chunk->instructions.size();
+    };
+
     // ── C Dispatch Fast Path (computed goto, Clang/GCC only) ────────
 #if defined(__clang__) || defined(__GNUC__)
     static_assert(sizeof(CompactInstruction) == sizeof(ZInstruction),
@@ -2704,11 +2712,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                         ? cf.inline_regs : cf.regs.data();
                     regs_ptr = co_regs;
                     ip = cf.ip_index;
-                    instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                    metadata_ptr = ctx.chunk->metadata.data();
-                    constants_ptr = ctx.chunk->constants.data();
-                    instructions_size = ctx.chunk->instructions.size();
+                    reload_chunk_pointers();
 
                     co->suspended = false;
                     ++co->resume_count;
@@ -2771,11 +2775,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ctx.upvalues = parent.upvalues;
                     ctx.coroutine = parent.coroutine;
                     ctx.chunk = parent.chunk;
-                    instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                    metadata_ptr = ctx.chunk->metadata.data();
-                    constants_ptr = ctx.chunk->constants.data();
-                    instructions_size = ctx.chunk->instructions.size();
+                    reload_chunk_pointers();
                     regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = yv;
                     iterative_call_stack_.pop_back();
@@ -3254,11 +3254,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ctx.upvalues = parent.upvalues;
                     ctx.coroutine = parent.coroutine;
                     ctx.chunk = parent.chunk;
-                    instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                    metadata_ptr = ctx.chunk->metadata.data();
-                    constants_ptr = ctx.chunk->constants.data();
-                    instructions_size = ctx.chunk->instructions.size();
+                    reload_chunk_pointers();
                     regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = yv;
                     iterative_call_stack_.pop_back();
@@ -3307,11 +3303,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                         ctx.call_env = function->closure;
                         ctx.upvalues = &function->captured_upvalues;
                         ctx.module_env = function->closure;
-                        instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                        metadata_ptr = ctx.chunk->metadata.data();
-                        constants_ptr = ctx.chunk->constants.data();
-                        instructions_size = ctx.chunk->instructions.size();
+                        reload_chunk_pointers();
 
                         const int mr = ctx.chunk->max_regs;
                         const int lc = ctx.chunk->local_count;
@@ -3583,11 +3575,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                         ? cf.inline_regs : cf.regs.data();
                     regs_ptr = co_regs;
                     ip = cf.ip_index;
-                    instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                    metadata_ptr = ctx.chunk->metadata.data();
-                    constants_ptr = ctx.chunk->constants.data();
-                    instructions_size = ctx.chunk->instructions.size();
+                    reload_chunk_pointers();
 
                     co->suspended = false;
                     ++co->resume_count;
@@ -3707,11 +3695,7 @@ RuntimeResult<Value> Runtime::execute_register_bytecode(const BytecodeFunction& 
                     ctx.upvalues = parent.upvalues;
                     ctx.coroutine = parent.coroutine;
                     ctx.chunk = parent.chunk;
-                    instructions_ptr = ctx.chunk->instructions.data();
-                    hot_instrs = ctx.chunk->hot_instructions.data();
-                    metadata_ptr = ctx.chunk->metadata.data();
-                    constants_ptr = ctx.chunk->constants.data();
-                    instructions_size = ctx.chunk->instructions.size();
+                    reload_chunk_pointers();
                     regs_ptr = register_pool_.data() + ctx.reg_base;
                     regs_ptr[parent.dst] = return_value;
                     iterative_call_stack_.pop_back();
